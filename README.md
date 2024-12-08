@@ -375,7 +375,7 @@ As shown all tables are created, waiting for data to be uploaded.
    `200 OK`
 
 ### 6. Get Pending and Overdue Tasks from the database
-   Lastly, we can check whether a task is pending or overdue. It is important to note that to check for these 2 functions, the task must be pending and their dates must be >= or < today's date respectively. So for tasks marked "Completed" in the status, they are not meant to be included in the output of these two functions. The method must be GET (to extract) and the URL path `/tasks/pending` and `/tasks/pending` respectively. The output is a list of elements that meet the condition set on the due_date column. The following demonstrations illustrate these two functions.
+   Lastly, we can check whether a task is pending or overdue. It is important to note that to check for these 2 functions, the task must be pending and their dates must be >= or < today's date respectively. So tasks marked "Completed" in the status are not meant to be included in the output of these two functions. The method must be GET (to extract) and the URL path `/tasks/pending` and `/tasks/overdue` respectively. The output is a list of elements that meet the condition set on the due_date column. This is an efficient way to filter data. The following demonstrations illustrate these two functions.
 
 
    ``` bash
