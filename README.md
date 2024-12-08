@@ -39,6 +39,7 @@ Using a database has its advantages over a `CSV` spreadsheet, the most being its
 
 ### Installation
 1. Clone or download the repository containing the following files:
+   - `images` **Folder**
    - `Task.py`
    - `Task_manager.py`
    - `database.py`
@@ -60,6 +61,9 @@ Using a database has its advantages over a `CSV` spreadsheet, the most being its
    │ README.md # to document the workings of the system
       └── venv
    ```
+
+
+
    ## Schema used in the database
    The following table includes all attributes used across all the tables: all_tasks, personal_tasks, and work_tasks.
    - `database.py`
@@ -76,6 +80,8 @@ Using a database has its advantages over a `CSV` spreadsheet, the most being its
    |team_members  |TEXT                   |This is only relevant in the work_tasks table to allocate members of each task |
 
 
+
+
    ## Flask methods and their route (URL path) for each task performed in `app.py`
 
    |Action        |method        |URL path               |Description                                         |
@@ -87,6 +93,9 @@ Using a database has its advantages over a `CSV` spreadsheet, the most being its
    |delete_task   |DELETE        |`/tasks/<int:task_id>` |delete a row of data based on the task_id           |
    |get_pending...|GET           |`/tasks/pending`       |Lists all pending rows based on due_date and status |
    |get_overdue...|GET           |`/tasks/overdue`       |Lists all overdue rows based on due_date and status |
+
+
+
 
 ### Running the Program
 ```bash
@@ -109,27 +118,41 @@ Tables are Successfully Created!
 `http://127.0.0.1:5000`: This is the link that leads to the web page where the output is contained. To print the result, append the URL paths stated above
 ## System Architecture
 
-### 1. The SQL table was formed using DataGrip 2024.4.3 or Postman
+
+
+
+## 1. The SQL table was formed using DataGrip 2024.4.3 or Postman
 Since the tables were successfully created, it is necessary to look at them and test the work behind them. 
 The tables created display the following tables:
 - **all_tasks table**: contains id, title, due_date, status, flag and a description
-![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
+
 
 - **personal_tasks table**: only contains two columns. The unique task_id and priority of the task
-![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/personal_tasks_created.png)
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/personal_tasks_created.png)
+
 
 - **work_tasks table**: only contains two columns. The unique task_id and the team_members added
-![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/work_tasks_created.png)
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/work_tasks_created.png)
+
 
 As shown all tables are created, waiting for data to be uploaded.
-#### Database Functions
-1. **To Create a task and load it into the database**
+### Database Functions
+ - First, set Postman to the following settings:
+   - ***Headers***: set `Content_type` to `application/json`
+   - ***Body***: set to `raw`
+   -  ***Method***: will be demonstrated below
+   - ***URL path***: `http://127.0.0.1:5000/tasks` (the default path)
+   - 
+#### 1. To Create a task and load it into the database
+
    - First, set Postman to the following settings:
-      - ***Headers***: set `Content_type` to `application/json`
-      - ***Body***: set to `raw`
       - ***Method***: POST
-      - ***URL path***: `http://127.0.0.1:5000/tasks`       
+      - ***URL path***: `http://127.0.0.1:5000/tasks`
+      
    - Secondly, to upload data, paste this in the body. the data is input with dictionaries as follows:
+
+
         ```bash
         {
        "title": "Test Task",
@@ -144,13 +167,18 @@ As shown all tables are created, waiting for data to be uploaded.
       ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/1e6f4aede3a4841768d4c6cb3b422fc187edf168/images/task_created.png)
 
    To check if the tables are updated, we open DataGrip and check. Keep in mind the data is of different flags so we expect the personal_tasks and work_tasts to automatically hold these data inputs. After creating new tasks, these are the output tables.
-   
-      ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/1e6f4aede3a4841768d4c6cb3b422fc187edf168/images/more_tasks_inputed.png)
+   **all_tasks**
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/1e6f4aede3a4841768d4c6cb3b422fc187edf168/images/more_tasks_inputed.png)
 
-   **For work_tasks**:
+
+
+   **work_tasks**:
    ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/d9eb67eee35975cf51d78a835f1d222db7171f16/images/work_tasks_loaded2.png)
 
+
+
    Notice that the tast_id repeats itself. This is because the inputted two lists and the system allocated each element to its row while preserving the task+id as intended. the following was the input.
+
 
 
    **Work Task1**
@@ -175,12 +203,14 @@ As shown all tables are created, waiting for data to be uploaded.
    }
    ```
 
+
    **For Personal_tasks**:
    ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/d9eb67eee35975cf51d78a835f1d222db7171f16/images/personal_tasks_loaded.png)
 
+
    `201 CREATED`: Task created successfully!
 
-3. **List rows from the database**
+3. List rows from the database
    We call the GET method in Postman, and a list of all our entries will be listed in the Postman interface. alternatively, we can settle for the table displayed in the DataGrip interface to show an ordered table of rows.
      ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/262e2d2761901a814c8ecf07e79762c4b0a0d295/images/syntax_all_tasks_listing.png)
  
