@@ -5,6 +5,7 @@ The Task Management System is a web-based database. It is not interactive, but d
    - `all_tasks`
    - `personal_tasks`
    - `work_tasks`
+
 Using a database has it's advantage over a csv spreadsheet, the most being it's independence from the creator's memory and prevention from coercion and data insecurity.
      
 
