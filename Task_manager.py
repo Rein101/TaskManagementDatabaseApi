@@ -62,7 +62,7 @@ class TaskManager:
             if description is not None:
                 cursor.execute('UPDATE all_tasks SET description = ? WHERE id = ?', (description, task_id))
             if priority is not None:
-                cursor.execute('UPDATE personal_tasks SET priority = ? WHERE id = ?', (priority, task_id))
+                cursor.execute('UPDATE personal_tasks SET priority = ? WHERE task_id = ?', (priority, task_id))
             if team_members is not None:
                 for member in team_members:
                     cursor.execute('INSERT INTO work_tasks(task_id, team_members) VALUES(?,?,?)', (task_id, member))
@@ -94,7 +94,7 @@ class TaskManager:
         with sqlite3.connect(database) as conn: 
             cursor = conn.cursor()
             cursor.execute('SELECT * FROM all_tasks WHERE status = "Pending"') 
-            tasks = cursor.fetchall() 
+            tasks = cursor.fetchall() # retrieve all the rows with a pending status
             pending_tasks = [] 
             current_date = datetime.now().date()
             for task in tasks: 
@@ -109,7 +109,7 @@ class TaskManager:
         with sqlite3.connect(database) as conn: 
             cursor = conn.cursor() 
             cursor.execute('SELECT * FROM all_tasks WHERE status = "Pending"') 
-            tasks = cursor.fetchall() 
+            tasks = cursor.fetchall()  # retrieve all the rows with a pending status again
             overdue_tasks = []
             current_date = datetime.now().date()
             for task in tasks: 
