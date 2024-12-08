@@ -208,7 +208,7 @@ The tables created display the following tables:
 
 
 As shown all tables are created, waiting for data to be uploaded.
-### Database Functions
+## Database Functions
 
  - First, set `Postman Web` to the following settings:
    - ***Headers***: set `Content_type` to `application/json`
@@ -216,7 +216,7 @@ As shown all tables are created, waiting for data to be uploaded.
    -  ***Method***: will be demonstrated below
    - ***URL path***: `http://127.0.0.1:5000/tasks` (the default path)
 
-#### 1. To Create a task and load it into the database
+### 1. To Create a task and load it into the database
 
    - First, set Postman to the following settings:
       - ***Method***: POST
@@ -286,14 +286,14 @@ As shown all tables are created, waiting for data to be uploaded.
    `201 CREATED`: Task created successfully!
 
 
-#### 3. List rows from the database
+### 2. List rows from the database
 
    We call the GET method in Postman, and a list of all our entries will be listed in the Postman interface. alternatively, we can settle for the table displayed in the DataGrip interface to show an ordered table of rows.
 
    ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/262e2d2761901a814c8ecf07e79762c4b0a0d295/images/syntax_all_tasks_listing.png)
 
 
-#### 4. Retrieve a row from the database
+### 3. Retrieve a row from the database
    To retrieve a row of data, we use the GET method and  use the URL path `/tasks/<int:task_id>`. The task_id is relevant because it is the reference of our extraction. using task_id = 4 will output a list of the rows with task_id of 4. The int: just shows that the task is an integer. It is shown as follows.
 
    ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/932bc34ecce5618af07a539c2a6d81306978cb84/images/get_task_4_1.png)
@@ -325,7 +325,7 @@ As shown all tables are created, waiting for data to be uploaded.
    `200 OK`
 
 
-#### 6. To Update Elements in the database
+### 4. To Update Elements in the database
    To update an element in any row of any table, we use the method PUT and the URL path `/tasks/<int:task_id>`. Just like in retrieving the row, Updating an element requires the task_id to access the row we need to update. We can update individual elements or entire rows, as long as the task_id is well set. To test this, we do the following:
 
 
@@ -353,7 +353,7 @@ As shown all tables are created, waiting for data to be uploaded.
    `200 OK`: Task Created Successfully
 
 
-#### 7. Delete rows of dates from the database
+### 5. Delete rows of dates from the database
    To delete tasks from the database, we must use the method DELETE and use the URL `/tasks/<int:task_id>` to specify the row (task_id) to delete. In the database, the first elements take on task_id = 2. This is because there was a task in row 1, which was later deleted. This is to demonstrate the effectiveness of the delete command because it is both advantageous and reasonable to maintain the original unique task_id for each row. Hence the data starts at row 2 for the user or team to identify which rows have been deleted and inquire the reasons behind it to maintain the integrity of the data. The following is a demonstration of that.
 
   
@@ -374,7 +374,7 @@ As shown all tables are created, waiting for data to be uploaded.
 
    `200 OK`
 
-8. **Get Pending and Overdue Tasks from the database**
+### 6. Get Pending and Overdue Tasks from the database
    Lastly, we can check whether a task is pending or overdue. It is important to note that to check for these 2 functions, the task must be pending and their dates must be >= or < today's date respectively. So for tasks marked "Completed" in the status, they are not meant to be included in the output of these two functions. The method must be GET (to extract) and the URL path `/tasks/pending` and `/tasks/pending` respectively. The output is a list of elements that meet the condition set on the due_date column. The following demonstrations illustrate these two functions.
 
 
@@ -415,7 +415,7 @@ As shown all tables are created, waiting for data to be uploaded.
 
    `pending_tasks = []` and `overdue_tasks = []`: Empty lists that we wish to store the pending and overdue tasks respectively, if any.
 
-   `datetime.strptime(task[2], "%Y-%m-%d")`: This is a datetime function that converts due_date elements from the text to a date with the format YYYY-MM-DD. task[2] represents the third column which is the column of due dates. this code is meant to convert text to date so that we can compare each element in column 3 with today's date and identify whether the task is still pending or is **both** pending and overdue.
+   `datetime.strptime(task[2], "%Y-%m-%d")`: This is a datetime function that converts due_date elements from the text to a date with the format YYYY-MM-DD. `task[2]` represents the third column which is the column of due dates. this code is meant to convert text to date so that we can compare each element in column 3 with today's date and identify whether the task is still pending or is **both** pending and overdue.
 
    The output is as follows:
    **In Postman Web**
@@ -452,6 +452,7 @@ As shown all tables are created, waiting for data to be uploaded.
 
 
    *2. To test if the task is overdue or not. Set methods = GET and URL path = "/tasks/overdue"*
+
    ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/b309aa1c6a92a703d996996935dc86c9c6125c48/images/postman_overdue_output.png)
 
    Voila!! The task with task_id 7 has been registered into the overdue list, and now we can see the task that was supposed to be done before today.
@@ -459,7 +460,7 @@ As shown all tables are created, waiting for data to be uploaded.
    `200 OK`: Program executed accordingly.
 
 ## Conclusion:
-Implementing databases(Relational) is far better than dealing with spreadsheets because the data is more secure, more accessible and less likely to disappear when the Computer's RAM is corrupted since it is not dependent on memory. It is also advantageous because it creates a system where non-shared columns can exist outside of the main table but still contribute to the entire database. It is also noted that it is better and more interactive to use an API server, to avoid memory dependence, and to display the output more interactively compared to using `interface.py` as used in the previous task. 
+Implementing databases(Relational) is far better than dealing with spreadsheets because the data is more secure, more accessible and less likely to disappear when the Computer's RAM is corrupted since it is not dependent on memory. It is also advantageous because it creates a system where non-shared columns can exist outside of the main table but still contribute to the entire database. It is also noted that it is better and more interactive to use an API server, to avoid memory dependence, and to display the output more interactively compared to using `interface.py` as used in the previous task.
 
 ### Points of Learning.
 
@@ -479,7 +480,7 @@ Implementing databases(Relational) is far better than dealing with spreadsheets 
   
         - `rows = cursor.fetchone()`: retrieves only one element, usually denoted by task_id i.e.`... WHERE task_id = ?'),(id,)`.
    
-##### References:
+#### References:
 1. Lecture notes and Lab practices.
 2. https://www.sqlitetutorial.net/sqlite-python/creating-database/
 3. https://datagy.io/python-sqlite-tutorial/?form=MG0AV3
@@ -496,7 +497,7 @@ The scheme started above. How to initialize a FLask() function. the different me
 
 **D - DELETE**
 
-##### References:
+#### References:
 1. Lecture notes and Lab practices.
 2. https://realpython.com/flask-connexion-rest-api/?form=MG0AV3#initiate-your-flask-project
 
