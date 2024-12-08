@@ -82,6 +82,7 @@ Using a database has its advantages over a `CSV` spreadsheet, the most being its
 
 
 
+
    ## Flask methods and their route (URL path) for each task performed in `app.py`
 
    |Action        |method        |URL path               |Description                                         |
