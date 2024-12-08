@@ -107,10 +107,10 @@ The tables created display the following tables:
 - **all_tasks table**: contains id, title, due_date, status, flag and a description
 ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
 
-- **personal_tasks table**: only contains two columns. The unique id and priority of the task
+- **personal_tasks table**: only contains two columns. The unique task_id and priority of the task
 ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/personal_tasks_created.png)
 
-- **work_tasks table**: only contains two columns. The unique id and the team_members added
+- **work_tasks table**: only contains two columns. The unique task_id and the team_members added
 ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/work_tasks_created.png)
 
 As shown all tables are created, waiting for data to be uploaded.
@@ -133,259 +133,59 @@ As shown all tables are created, waiting for data to be uploaded.
         ```
 
    The outcome should be as follows in Postman Web.
-   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/task_created.png)
+      ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/1e6f4aede3a4841768d4c6cb3b422fc187edf168/images/task_created.png)
 
    To check if the tables are updated, we open DataGrip and check. Keep in mind the data is of different flags so we expect the personal_tasks and work_tasts to automatically hold these data inputs. after creating new tasks, these are the output tables.
-   
-   - Collects task details (title,
-   - For personal tasks: Sets priority level at either high,medium or low
-   - For work tasks: Assigns team members
-   ```python
-   # Example usage
-   
-   task = create_task(task_manager)
+      ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/1e6f4aede3a4841768d4c6cb3b422fc187edf168/images/more_tasks_inputed.png)
+
+   **For work_tasks**:
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/d9eb67eee35975cf51d78a835f1d222db7171f16/images/work_tasks_loaded2.png)
+
+   Notice that the tast_id repeats itself. This is because the inputted two lists and the system allocated each element to it's row while preserving the task+id as intended. the following was the input.
+   **Work Task1**
+   ```bash
+   {
+    "title": "Project Meeting",
+    "due_date": "2024-12-14",
+    "flag": "work",
+    "description": "Meeting to discuss the Q4 project deliverables",
+    "team_members": ["Alice", "Bob"]
+   }
    ```
 
-3. **View Tasks** (`view_tasks`)
-   - Displays all tasks in the system
-   - Shows task details including Task ID, description, due date, and status
-
-4. **Filter Tasks** (`get_tasks`)
-   - Filters tasks by type (personal/work)
-   - Displays filtered task list with details
-
-5. **Delete Task** (`delete_task`)
-   - Removes task by ID
-   - Provides confirmation of deletion
-
-6. **Save/Load Tasks** (`save_tasks_to_csv`/`load_tasks_from_csv`)
-   - Persists tasks to CSV file
-   - Loads tasks from existing CSV file. If there are no tasks, an error is printed
-
-7. **View Pending/Overdue Tasks** (`view_pending_and_overdue_tasks`)
-   - Shows tasks categorized by status
-   - Identifies overdue tasks based on current date
-
-### 2. Task Module (`task.py`)
-Defines the base Task class and its subclasses:
-
-#### Classes
-- **Task**: Base class with common task properties
-- **PersonalTask**: Extends Task with priority settings
-- **WorkTask**: Extends Task with team member management
-
-### 3. Task Manager Module (`task_manager.py`)
-Handles task operations and storage:
-
-#### Key Methods
-- `add_task`: Adds new tasks to the system
-- `get_tasks`: Retrieves filtered task lists
-- `delete_task`: Removes tasks by ID
-- `save_task`/`load_task`: Handles CSV file operations
-- `get_pending_tasks`/`get_overdue_tasks`: Creates lists of filtered objects based on whether they are pending or overdue respectively, from `datatime.now().date()`
-
-## Error Handling
-
-The system implements error handling throughout:
-
-1. **Input Validation**
-   - Task type validation (personal/work)
-   - Date format validation (YYYY-MM-DD)
-   - Priority level validation (high/medium/low)
-
-2. **File Operations**
-   ```python
-   # error handling in the task_manager.py
-   try:
-       with open(filename, 'r', newline='\n') as file:
-           # File operations
-   
-   except FileNotFoundError:
-       print(f"Error: The file '{filename}' does not exist.")
-   except (ValueError, IndexError):
-       print("Error: Invalid data format in the CSV file.")
-    except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-   
+   **Work Task2**
+   ```bash
+   {
+    "title": "Code Review",
+    "due_date": "2024-12-18",
+    "flag": "work",
+    "description": "Review the new feature implementation",
+    "team_members": ["Charlie", "Dave"]
+   }
    ```
 
-3. **Data Validation**
-   - Task ID verification before deletion
-   - Team member format validation
-   - Description length validation (max 15 characters)
+   **For Personal_tasks**:
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/d9eb67eee35975cf51d78a835f1d222db7171f16/images/personal_tasks_loaded.png)
 
-## Usage Examples
+   Tasks are created successfully!
 
-### Creating a Personal Task
-```python
-Enter your choice (1-8): 1
-Enter task type (personal/work): personal
-Enter task title: Buy groceries
-Enter due date (YYYY-MM-DD): 2024-11-20
-Enter task description: Weekly shopping
-Enter priority (high/medium/low): high
-```
+2. **List rows from the database**
+   We call the GET method in Postman, and a list of all our entries will be listed in the Postman interface. alternatively, we can settle for the table displayed in the DataGrip interface to show an ordered table of rows.
+     ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/262e2d2761901a814c8ecf07e79762c4b0a0d295/images/syntax_all_tasks_listing.png)
 
-### Creating a Work Task
-```python
-Enter your choice (1-8): 1
-Enter task type (personal/work): work
-Enter task title: Project meeting
-Enter due date (YYYY-MM-DD): 2024-11-15
-Enter task description: Team sync
-Enter team members (comma-separated): John, Alice, Bob
-```
+   
+3. **Retrieve a row from the database**
+    To retrieve a row of data, we use the GET method and  use the URL path `/tasks/<int:task_id>`. The task_id is relevant because it is the reference of our extraction. using task_id = 4 will output a list of the row with task_id of 4. The int: just shows that the task is an integer. It is shown as follows.
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/932bc34ecce5618af07a539c2a6d81306978cb84/images/get_task_4_1.png)
+   Even though the input was a json object, the output will always be a list. This operation can only be done one by one.
+   
+4. **To Update Elements in the database**
+   To update an element in any row of any table, we use the method PUT and the URL path `/tasks/<int:task_id>`. Just like in retrieving the row, Updating an element requires the task_id to access the row we need to update.
+7. **Delete rows of dates from the database**
 
-### Viewing Filtered Tasks
-```python
-Enter your choice (1-8): 2
-Enter task type to filter by (personal/work): personal
-Task ID: 1, Task: Buy groceries, Due Date: 20-11-2024, Status: Pending, Priority: high
-```
+8. **Get Pending and Overdue Tasks from the database**
 
-#### Managing Tasks
-```python
-# Viewing All Tasks
-Enter task type (personal/work/all): all
-Task ID: 1, Task: Dentist Appointment, Due Date: 20-11-2024, Status: Pending, Priority: high
-Task ID: 2, Task: Client Presentation, Due Date: 15-11-2024, Status: Pending, Team: John, Alice, Bob, Sarah
-
-# Filtering Personal Tasks
-Enter task type to filter by (personal/work): personal
-Task ID: 1, Task: Dentist Appointment, Due Date: 20-11-2024, Status: Pending, Priority: high
-
-# Filtering Work Tasks
-Enter task type to filter by (personal/work): work
-Task ID: 2, Task: Client Presentation, Due Date: 15-11-2024, Status: Pending, Team: John, Alice, Bob, Sarah
-```
-
-### 2. Task Priority Management
-
-#### High Priority Personal Tasks
-```python
-Enter task type (personal/work): personal
-Enter task title: Tax Return
-Enter due date (YYYY-MM-DD): 2024-12-31
-Enter task description: File taxes
-Enter priority (high/medium/low): high
-
-# Later viewing high priority tasks
-Task ID: 3, Task: Tax Return, Due Date: 31-12-2024, Status: Pending, Priority: high
-```
-
-#### Team Task Management
-```python
-Enter your choice (1-8): 1
-# Creating a team project task
-Enter task type (personal/work): work
-Enter task title: Sprint Planning
-Enter due date (YYYY-MM-DD): 2024-11-18
-Enter task description: Q4 Goals
-Enter team members (comma-separated): Dev Team, Product Owner, Scrum Master
-
-# Creating a subtask
-Enter task type (personal/work): work
-Enter task title: User Stories
-Enter due date (YYYY-MM-DD): 2024-11-16
-Enter task description: Story points
-Enter team members (comma-separated): Dev Team
-```
-
-### 3. Task Status and Timeline Management
-
-#### Checking Pending Tasks
-```python
-# View Pending Tasks
-Enter your choice (1-8): 6
-Pending Tasks:
-Task ID: 1, Task: Dentist Appointment, Due Date: 20-11-2024, Status: Pending, Priority: high
-Task ID: 2, Task: Client Presentation, Due Date: 15-11-2024, Status: Pending, Team: John, Alice, Bob, Sarah
-```
-
-#### Checking Overdue Tasks
-```python
-# View Overdue Tasks
-Enter your choice (1-8): 7
-Overdue Tasks:
-Task ID: 4, Task: Weekly Report, Due Date: 13-11-2024, Status: Pending, Team: Manager, Analyst
-```
-
-### 4. File Operations
-
-#### Saving Tasks to CSV
-```python
-# Save current tasks
-Enter your choice (1-8): 4
-Tasks saved to task_list.csv.
-
-# CSV Format Example:
-Task_ID,Description,Due Date,Type,Priority
-1,Dentist Appointment,2024-11-20,personal,high
-2,Client Presentation,2024-11-15,work,"John, Alice, Bob, Sarah"
-```
-
-#### Loading Tasks from CSV
-```python
-# Load tasks from file
-Enter your choice (1-8): 5
-Tasks loaded from task_list.csv.
-```
-
-### 5. Error Handling Examples
-
-#### Invalid Date Format
-```python
-Enter task type (personal/work): personal
-Enter task title: Gym Session
-Enter due date (YYYY-MM-DD): 20-11-2024
-Error: Invalid date format. Please use YYYY-MM-DD format.
-```
-
-#### Invalid Priority Level
-```python
-Enter task type (personal/work): personal
-Enter task title: Reading
-Enter due date (YYYY-MM-DD): 2024-11-20
-Enter priority (high/medium/low): urgent
-Error: Not a Valid Priority!
-```
-
-#### Invalid Task ID for Deletion
-```python
-Enter task ID to delete: 999
-No task found with ID 999.
-```
-
-## Best Practices
-
-1. **Regular Saving**
-   - Save tasks regularly using the save option
-   - Load from CSV when restarting the application
-
-2. **Task Organization**
-   - Use clear descriptions
-   - Set appropriate priorities for personal tasks
-   - Include all relevant team members for work tasks
-     
-3. **Grammatical errors in Priority and Task Type**
-    -Write the commands correctly for optimum output
-
-## Troubleshooting
-
-Common issues and solutions:
-
-1. **File Not Found Error**
-   - Ensure CSV file exists in the correct directory
-   - Check file permissions
-
-2. **Invalid Date Format**
-   - Use YYYY-MM-DD format
-   - Ensure dates are valid
-
-3. **Task Not Found**
-   - Verify task ID exists
-   - Refresh task list if recently modified
-
-
-
-[def]: images\all_tasks_created.png
+   
+   
+   
+  
