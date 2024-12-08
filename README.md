@@ -102,22 +102,42 @@ Tables are Successfully Created!
 ## System Architecture
 
 ### 1. The SQL table was formed using DataGrip 2024.4.3 or Postman
-Since the tables were successfully created, it is necessary to look at them and test the work behind them.
-the tables created display the following tables:
-- all_tasks table
-![image].(https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
+Since the tables were successfully created, it is necessary to look at them and test the work behind them. 
+The tables created display the following tables:
+- **all_tasks table**: contains id, title, due_date, status, flag and a description
+![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
 
-- personal_tasks table
-![image].(https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
+- **personal_tasks table**: only contains two columns. The unique id and priority of the task
+![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/personal_tasks_created.png)
 
-- work_tasks table
+- **work_tasks table**: only contains two columns. The unique id and the team_members added
 ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/work_tasks_created.png)
 
+As shown all tables are created, waiting for data to be uploaded.
+#### Database Functions
+1. **To Create a task and load it into the database**
+   - First, set Postman to the following settings:
+      - ***Headers***: set `Content_type` to `application/json`
+      - ***Body***: set to `raw`
+      - ***Method***: POST
+      - ***URL path***: `http://127.0.0.1:5000/tasks`       
+   - Secondly, to upload data, paste this in the body. the data is input with dictionaries as follows:
+        ```bash
+        {
+       "title": "Test Task",
+       "due_date": "2024-12-31",
+       "flag": "personal",
+       "description": "This is a test task",
+       "priority": "high"
+         }
+        ```
 
-#### Main Menu Functions
-1. **Create Task** (`create_task`)
-   - Prompts for task type (personal/work)
-   - Collects task details (title, due date, description)
+   The outcome should be as follows in Postman Web.
+   ![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/task_created.png)
+
+   To check if the tables are updated, we open DataGrip and check. Keep in mind the data is of different flags so we expect the personal_tasks and work_tasts to automatically hold these data inputs. after creating new tasks, these are the output tables.
+   
+   - Collects task details (title,
    - For personal tasks: Sets priority level at either high,medium or low
    - For work tasks: Assigns team members
    ```python
@@ -126,23 +146,23 @@ the tables created display the following tables:
    task = create_task(task_manager)
    ```
 
-2. **View Tasks** (`view_tasks`)
+3. **View Tasks** (`view_tasks`)
    - Displays all tasks in the system
    - Shows task details including Task ID, description, due date, and status
 
-3. **Filter Tasks** (`get_tasks`)
+4. **Filter Tasks** (`get_tasks`)
    - Filters tasks by type (personal/work)
    - Displays filtered task list with details
 
-4. **Delete Task** (`delete_task`)
+5. **Delete Task** (`delete_task`)
    - Removes task by ID
    - Provides confirmation of deletion
 
-5. **Save/Load Tasks** (`save_tasks_to_csv`/`load_tasks_from_csv`)
+6. **Save/Load Tasks** (`save_tasks_to_csv`/`load_tasks_from_csv`)
    - Persists tasks to CSV file
    - Loads tasks from existing CSV file. If there are no tasks, an error is printed
 
-6. **View Pending/Overdue Tasks** (`view_pending_and_overdue_tasks`)
+7. **View Pending/Overdue Tasks** (`view_pending_and_overdue_tasks`)
    - Shows tasks categorized by status
    - Identifies overdue tasks based on current date
 
