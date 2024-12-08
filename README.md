@@ -105,13 +105,13 @@ Tables are Successfully Created!
 Since the tables were successfully created, it is necessary to look at them and test the work behind them.
 the tables created display the following tables:
 - all_tasks table
-![image][images\all_tasks_created.png]images/
+![image].(https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
 
 - personal_tasks table
-![image](images\personal_tasks_created.png)
+![image].(https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/all_tasks_created.png)
 
 - work_tasks table
-![image](images\work_tasks_created.png)
+![image](https://github.com/Rein101/TaskManagementDatabaseApi/blob/56b0e2517ee1faa44921cb85d1927891e073416a/images/work_tasks_created.png)
 
 
 #### Main Menu Functions
