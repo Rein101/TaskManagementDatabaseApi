@@ -1,34 +1,34 @@
 # Task Management System
 
 ## Overview
-The Task Management System is a web-based database. It is not interactive, but does import data in rows through HTTP cUrl or Postman. It is build on a design that an individual adds data into the general (junction table) and the system automatic registers the task based on it's flag (`_personal or _work`). In total the database has 3 tables:
+The Task Management System is a web-based database. It is not interactive but does import data in rows through HTTP curl or Postman. It is built on a design in which an individual adds data into the general (junction table) and the system automatically registers the task based on its flag (`_personal or _work`). In total, the database has 3 tables:
    - `all_tasks`
    - `personal_tasks`
    - `work_tasks`
 
-Using a database has it's advantage over a csv spreadsheet, the most being it's independence from the creator's memory and prevention from coercion and data insecurity.
+Using a database has its advantages over a `CSV` spreadsheet, the most being its independence from the creator's memory and prevention of coercion and data insecurity.
      
 
 ### Key Features
 - Create Tasks
-- List tasks (all or based on the id provided)
+- List tasks (all or based on the task_id provided)
 - Monitor pending and overdue tasks
 - Updating tasks by element
 - Deleting tasks by task_id in the respective tables if required
-- Automatic saving of data into the personal_tasks and work_tasks based on flag, while preserving the original task_id for reference
+- Automatic saving of data into the personal_tasks and work_tasks based on the flag, while preserving the original task_id for reference
 
 ## Setup Instructions
 
 ### Prerequisites
 - Python 3.13.0
-- Visual Studio, any Web Browser, DataGrip 2024.4.3 and Postman
+- Visual Studio, any Web Browser, DataGrip 2024.4.3 and Postman Agent
 - Visual Environment
    - Create a Visual environment 
    - Activate it for use in the program
    - `python 3.13.0('venv':venv).\venv\Scripts\python.exe`
 - SQLite module (installed as sqlite3)
 - FLask module (installed as flask)
-- datetime module (included in Python standard library)
+- DateTime module (included in Python standard library)
 
 ### Installation
 1. Clone or download the repository containing the following files:
@@ -37,24 +37,24 @@ Using a database has it's advantage over a csv spreadsheet, the most being it's 
    - `database.py`
    - `app.py`
 
-### Flow Chart, Schema and Design Pattern
-   The task involved updating the task.py and task_manager.py into a database oriented program, integrating SQLite function like connect() e.t.c
+### Flow Chart, Schema, and Design Pattern
+   The task involved updating the task.py and task_manager.py into a database-oriented program, integrating SQLite functions like connect() e.t.c
 
-   ## Work FLow of the entire system
-   - The flowing is a work flow diagram of the thought process to accomplish the goal
+   ## Workflow of the entire system
+   - The flowing is a workflow diagram of the thought process to accomplish the goal
    ```bash
    source_code/
    │
-   │   ├── Task.py # to handle the foundation of the table by setting all attributes as known for further intergration
+   │   ├── Task.py # to handle the foundation of the table by setting all attributes as known for further integration
    │   ├── database.py # to create 3 tables using sqlite3 function
-   │   ├── Task_manager.py # to perform data management by intergaring database.py and more sqlite3 functions
+   │   ├── Task_manager.py # to perform data management by integrating database.py and more sqlite3 functions
    │   ├── app.py # to integrate an API flask into the whole system
    │
    │ README.md # to document the workings of the system
       └── venv
    ```
    ## Schema used in the database
-   The following is a table that includes all attributes used across all the tables: all_tasks, personal_tasks and work_tasks.
+   The following table includes all attributes used across all the tables: all_tasks, personal_tasks, and work_tasks.
    - `database.py`
 
    |Column        |Data Type              |Description                                                                    |
@@ -64,8 +64,8 @@ Using a database has it's advantage over a csv spreadsheet, the most being it's 
    |due_date      |TEXT NOT NULL          |This is the due date for performing the task named above                       |
    |flag          |TEXT NOT NULL          |This is either personal or work to link the related task to the intended table |
    |status        |TEXT DEFAULT "Pending" |This is either set to "Pending" or "Completed"                                 |
-   |description   |TEXT                   |This is a short descrition (ideally no more that 15 characters) of the task.   |
-   |priority      |TEXT DEFAULT 'low'     |Exists in the personal_tasks. Checks task is priority 'high','medium' or 'low' |
+   |description   |TEXT                   |This is a short description (ideally no more than 15 characters) of the task.   |
+   |priority      |TEXT DEFAULT 'low'     |Exists in the personal_tasks. Checks task is a priority 'high', 'medium' or 'low' |
    |team_members  |TEXT                   |This is only relevant in the work_tasks table to allocate members of each task |
 
 
@@ -86,7 +86,7 @@ Using a database has it's advantage over a csv spreadsheet, the most being it's 
 python app.py
 ```
 - result
-```cd
+``` cd
 Tables are Successfully Created!
  * Serving Flask app 'app'
  * Debug mode: on
@@ -98,14 +98,14 @@ Tables are Successfully Created!
  * Debugger is active!
  * Debugger PIN: 514-261-056
  ```
-`http://127.0.0.1:5000` : This is the link that leads to the web page where the output is contained. to print the result, append the URL paths stated above
+`http://127.0.0.1:5000`: This is the link that leads to the web page where the output is contained. To print the result, append the URL paths stated above
 ## System Architecture
 
-### 1. The SQL table formed using DataGrip 2024.4.3 or Postman
-Since the tables were successfully created, there is a need to look at the tables, and test the working behind it.
+### 1. The SQL table was formed using DataGrip 2024.4.3 or Postman
+Since the tables were successfully created, it is necessary to look at them and test the work behind them.
 the tables created display the following tables:
 - all_tasks table
-![image][images/all_tasks_created.png]
+![image][images\all_tasks_created.png]images/
 
 - personal_tasks table
 ![image](images\personal_tasks_created.png)
