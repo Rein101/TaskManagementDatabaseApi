@@ -480,9 +480,9 @@ Implementing databases(Relational) is far better than dealing with spreadsheets 
   
         - `rows = cursor.fetchone()`: retrieves only one row, usually by task_id i.e.`... WHERE task_id = ?'),(id,)`.
 
-= `UPDATE table_name SET c1 = ?, c2 = ? WHERE id = ?`: updates the elements of columns c1 and c2 to specified values on the specified id.
+- `UPDATE table_name SET c1 = ?, c2 = ? WHERE id = ?`: updates the elements of columns c1 and c2 to specified values on the specified id.
 
-= `DELETE FROM table_name WHERE id = ?`: deleted a row with the specified id from the table_name table.
+- `DELETE FROM table_name WHERE id = ?`: deleted a row with the specified id from the table_name table.
 
 
 #### References:
