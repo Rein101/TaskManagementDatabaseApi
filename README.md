@@ -126,7 +126,7 @@ Tables are Successfully Created!
 
 The tables were made in the `database.py` file, using the module `sqlite3` and its function. The following steps were implemented to achieve this result.
    1. Installing the `sqlite3` package
-   2. Importing the module into python
+   2. Importing the module into Python
    ``` bash
    python # First we import the sqlite3 module
    import sqlite3
@@ -415,7 +415,7 @@ As shown all tables are created, waiting for data to be uploaded.
 
    `pending_tasks = []` and `overdue_tasks = []`: Empty lists that we wish to store the pending and overdue tasks respectively, if any.
 
-   `datetime.strptime(task[2], "%Y-%m-%d")`: This is a datetime function that converts due_date elements from the text to a date with the format YYYY-MM-DD. `task[2]` represents the third column which is the column of due dates. this code is meant to convert text to date so that we can compare each element in column 3 with today's date and identify whether the task is still pending or is **both** pending and overdue.
+   `datetime.strptime(task[2], "%Y-%m-%d")`: This is a datetime function that converts due_date elements from text to date with the format YYYY-MM-DD. `task[2]` represents the third column which is the column of due dates. this code is meant to convert text to date so that we can compare each element in column 3 with today's date and identify whether the task is still pending or is **both** pending and overdue.
 
    The output is as follows:
    **In Postman Web**
@@ -468,7 +468,7 @@ Implementing databases(Relational) is far better than dealing with spreadsheets 
 
 - `CREATE TABLE`: creates a CSV data within the database.
 
-- `INSERT INTO table_name VALUES(?,?...), (a, b,...)`: adds data into a table called `table_name` the elements `a,b,...`
+- `INSERT INTO table_name VALUES(?,?...)`: adds data into a table called `table_name` specified elements.
 
 - `SELECT * FROM table_name`: retrieves the elements from `table_name`.
 
@@ -478,8 +478,13 @@ Implementing databases(Relational) is far better than dealing with spreadsheets 
 
         - `rows = cursor.fetchmany(size = 5)`: retrieves 5 rows from the table. `size` represents the number of rows to retrieve.
   
-        - `rows = cursor.fetchone()`: retrieves only one element, usually denoted by task_id i.e.`... WHERE task_id = ?'),(id,)`.
-   
+        - `rows = cursor.fetchone()`: retrieves only one row, usually by task_id i.e.`... WHERE task_id = ?'),(id,)`.
+
+= `UPDATE table_name SET c1 = ?, c2 = ? WHERE id = ?`: updates the elements of columns c1 and c2 to specified values on the specified id.
+
+= `DELETE FROM table_name WHERE id = ?`: deleted a row with the specified id from the table_name table.
+
+
 #### References:
 1. Lecture notes and Lab practices.
 2. https://www.sqlitetutorial.net/sqlite-python/creating-database/
@@ -487,7 +492,7 @@ Implementing databases(Relational) is far better than dealing with spreadsheets 
 
 
 #### 2. API and Rest Flask
-The scheme started above. How to initialize a FLask() function. the different methods i.e. `POST`, `GET` ,`PUT`, `DELETE` which represent the **CRUD** abbreviation respectively.
+The scheme started above contains URL paths and methods for each action. How to initialize a FLask() function. the different methods i.e. `POST`, `GET`, `PUT`, and `DELETE` which represent the **CRUD** abbreviation respectively.
 
 **C - CREATE** 
 
