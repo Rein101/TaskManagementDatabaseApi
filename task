@@ -1,0 +1,698 @@
+# ============================================================
+#  OPEX Cost Analytics Agent — Streamlit in Snowflake (SiS)
+#
+#  DEPLOY STEPS:
+#  1. PUT file://opex_semantic_model.yaml
+#         @ACC_PRD.COST_CENTER.CORTEX_STAGE
+#         AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+#  2. Snowsight → Streamlit → Create app (ACC_PRD, warehouse)
+#  3. Paste this file, add packages: plotly, pandas
+#
+#  REQUIRED PERMISSIONS:
+#    GRANT CORTEX_USER ON ACCOUNT TO ROLE <your_role>;
+#    GRANT READ ON STAGE ACC_PRD.COST_CENTER.CORTEX_STAGE TO ROLE <your_role>;
+# ============================================================
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import json
+import re
+from datetime import date
+
+try:
+    from snowflake.snowpark.context import get_active_session
+    from snowflake.cortex import Complete
+    import _snowflake
+    _IN_SIS = True
+except ImportError:
+    import snowflake.connector
+    _IN_SIS = False
+
+# ─── CONFIG ──────────────────────────────────────────────────────────────────
+SEMANTIC_MODEL_STAGE = "@ACC_PRD.COST_CENTER.CORTEX_STAGE/opex_semantic_model.yaml"
+NARRATIVE_MODEL      = "llama3.1-8b"
+ANALYST_ENDPOINT     = "/api/v2/cortex/analyst/message"
+
+# Dimension → (full table path, code column)
+# UPDATE column names if yours differ
+_DIM_TABLES: dict[str, tuple[str, str]] = {
+    "entity":          ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY",        "ENTITY_CODE"),
+    "cost_center":     ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER",   "COST_CENTER_CODE"),
+    "functional_area": ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA",     "FUNCTIONAL_AREA_CODE"),
+    "account":         ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT",       "ACCOUNT_CODE"),
+    "profit_center":   ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER", "PROFIT_CENTER_CODE"),
+}
+
+# FY starts October → Q1=Oct-Dec (prior cal year), Q2=Jan-Mar, Q3=Apr-Jun, Q4=Jul-Sep
+_QUARTER_CALENDAR: dict[str, tuple[int, list[int]]] = {
+    "Q1": (-1, [10, 11, 12]),
+    "Q2": ( 0, [ 1,  2,  3]),
+    "Q3": ( 0, [ 4,  5,  6]),
+    "Q4": ( 0, [ 7,  8,  9]),
+}
+_QUARTER_MONTH_ABBRS: dict[str, list[str]] = {
+    "Q1": ["Oct", "Nov", "Dec"],
+    "Q2": ["Jan", "Feb", "Mar"],
+    "Q3": ["Apr", "May", "Jun"],
+    "Q4": ["Jul", "Aug", "Sep"],
+}
+_MONTH_TO_NUM = {m: i+1 for i, m in enumerate(
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+)}
+
+SUGGESTED_QUESTIONS = [
+    "What are the top 10 cost centers by total OPEX?",
+    "Show monthly actual vs budget trend",
+    "Which functional areas have the highest variance vs budget?",
+    "Compare actual OPEX by entity",
+    "Which accounts are driving the most overspend?",
+    "Cost centers where actual exceeds forecast by more than 10%",
+    "Budget utilization rate by cost center",
+    "Year-over-year OPEX comparison by entity",
+    "Top GL accounts by spend in the selected period",
+    "Show prior year vs current year actuals",
+]
+
+# ─── CONNECTION ───────────────────────────────────────────────────────────────
+@st.cache_resource
+def get_session():
+    if _IN_SIS:
+        return get_active_session()
+    return snowflake.connector.connect(
+        account   = st.secrets["snowflake"]["account"],
+        user      = st.secrets["snowflake"]["user"],
+        password  = st.secrets["snowflake"]["password"],
+        role      = st.secrets["snowflake"]["role"],
+        warehouse = st.secrets["snowflake"]["warehouse"],
+        database  = "ACC_PRD",
+        schema    = "COST_CENTER",
+    )
+
+session = get_session()
+
+# ─── PAGE CONFIG ─────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="OPEX Cost Analytics Agent",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ─── CSS ─────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+  .header-banner {
+      background: linear-gradient(135deg, #29B5E8 0%, #0073B6 100%);
+      padding: 1.2rem 1.6rem; border-radius: 12px;
+      margin-bottom: 1rem; color: white;
+  }
+  .header-banner h1 { margin:0; font-size:1.55rem; font-weight:700; }
+  .header-banner p  { margin:0.2rem 0 0; opacity:.88; font-size:.88rem; }
+
+  .filter-badge {
+      background:#F0F9FF; border:1px solid #BAE6FD;
+      border-radius:8px; padding:.45rem .8rem;
+      color:#0369A1; font-size:.8rem; margin-bottom:.8rem;
+  }
+
+  .kpi-row { display:flex; gap:10px; flex-wrap:wrap; margin:.5rem 0; }
+  .kpi-card {
+      flex:1; min-width:150px; background:white;
+      border:1px solid #E5E7EB; border-radius:10px;
+      padding:.85rem 1rem; box-shadow:0 1px 5px rgba(0,0,0,.06);
+  }
+  .kpi-label { color:#6B7280; font-size:.72rem; font-weight:600;
+               text-transform:uppercase; letter-spacing:.5px; }
+  .kpi-value { color:#111827; font-size:1.5rem; font-weight:700; margin-top:.12rem; }
+
+  .bubble-user {
+      background:#EFF6FF; border:1px solid #BFDBFE;
+      border-radius:14px 14px 4px 14px;
+      padding:.7rem .95rem; margin:.35rem 0;
+      color:#1E40AF; font-weight:500;
+  }
+  .bubble-agent {
+      background:#F9FAFB; border:1px solid #E5E7EB;
+      border-radius:14px 14px 14px 4px;
+      padding:.7rem .95rem; margin:.35rem 0; color:#374151;
+  }
+  .narrative-box {
+      background:linear-gradient(135deg,#F0F9FF 0%,#E0F2FE 100%);
+      border-left:4px solid #29B5E8; border-radius:0 8px 8px 0;
+      padding:.8rem 1rem; margin:.6rem 0;
+      color:#0C4A6E; line-height:1.55;
+  }
+  .turn-divider { border:none; border-top:1px solid #F3F4F6; margin:.8rem 0; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─── FISCAL PERIOD HELPERS ────────────────────────────────────────────────────
+def fiscal_years() -> list[str]:
+    y = date.today().year
+    return [str(y - 2), str(y - 1), str(y)]
+
+def fiscal_quarters() -> list[str]:
+    return ["Q1", "Q2", "Q3", "Q4"]
+
+def fiscal_months() -> list[str]:
+    return ["Jan","Feb","Mar","Apr","May","Jun",
+            "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+def default_year() -> str:
+    return str(date.today().year)
+
+def default_quarter() -> str:
+    # FY starts October: (month-10)%12 shifts Oct→0, Nov→1 … Sep→11
+    shifted = (date.today().month - 10) % 12
+    return f"Q{shifted // 3 + 1}"
+
+def default_month() -> str:
+    return date.today().strftime("%b")
+
+def available_months_for_quarters(selected_quarters: list[str]) -> list[str]:
+    """Return month abbreviations that belong to the selected quarters."""
+    if not selected_quarters:
+        return fiscal_months()
+    months = []
+    for q in ["Q1", "Q2", "Q3", "Q4"]:
+        if q in selected_quarters:
+            months.extend(_QUARTER_MONTH_ABBRS[q])
+    return months
+
+def compute_periods(
+    sel_years: list[str],
+    sel_quarters: list[str],
+    sel_months: list[str],
+) -> list[str]:
+    """
+    Convert UI selections → sorted YYYYMM strings.
+    sel_months is an optional within-quarter filter; empty = all months.
+    """
+    if not sel_years:
+        return []
+    quarters  = sel_quarters if sel_quarters else ["Q1", "Q2", "Q3", "Q4"]
+    month_nums = {_MONTH_TO_NUM[m] for m in sel_months} if sel_months else None
+
+    periods: set[str] = set()
+    for fy_str in sel_years:
+        fy = int(fy_str)
+        for q in quarters:
+            yr_offset, q_months = _QUARTER_CALENDAR[q]
+            cal_year = fy + yr_offset
+            for m in q_months:
+                if month_nums is None or m in month_nums:
+                    periods.add(f"{cal_year}{m:02d}")
+    return sorted(periods)
+
+
+# ─── DIMENSION FILTER LOADER ──────────────────────────────────────────────────
+@st.cache_data(ttl=600)
+def get_filter_values(dimension: str) -> list[str]:
+    """Load distinct code values from a dimension master view."""
+    if dimension not in _DIM_TABLES:
+        return []
+    table, col = _DIM_TABLES[dimension]
+    try:
+        df = session.sql(f"""
+            SELECT DISTINCT {col} AS VAL
+            FROM {table}
+            WHERE {col} IS NOT NULL
+            ORDER BY 1
+        """).to_pandas()
+        return df["VAL"].tolist()
+    except Exception:
+        return []
+
+
+# ─── FILTER → QUESTION BUILDER ────────────────────────────────────────────────
+def build_filtered_question(question: str, filters: dict) -> str:
+    """
+    Prefix the user question with a plain-English filter block so Cortex
+    Analyst restricts its generated SQL to those dimensions automatically.
+    """
+    parts: list[str] = []
+
+    periods = filters.get("periods", [])
+    if periods:
+        preview = ", ".join(periods[:8])
+        more    = f" (+{len(periods)-8} more)" if len(periods) > 8 else ""
+        parts.append(f"Fiscal periods (YYYYMM format): {preview}{more}")
+
+    dim_labels = [
+        ("versions",         "Version / Scenario"),
+        ("entities",         "Entity"),
+        ("cost_centers",     "Cost Center"),
+        ("functional_areas", "Functional Area"),
+        ("accounts",         "GL Account"),
+        ("profit_centers",   "Profit Center"),
+    ]
+    for key, label in dim_labels:
+        vals = filters.get(key, [])
+        if vals:
+            parts.append(f"{label}: {', '.join(vals)}")
+
+    if not parts:
+        return question
+
+    ctx = "Active filters (apply these to the analysis):\n" + "\n".join(
+        f"  • {p}" for p in parts
+    )
+    return f"{ctx}\n\nQuestion: {question}"
+
+
+def filter_summary(filters: dict) -> str:
+    """One-line badge text summarising active filters."""
+    parts: list[str] = []
+    periods = filters.get("periods", [])
+    if periods:
+        # Show fiscal years + quarters in a compact form
+        fy_set  = sorted({p[:4] for p in periods})
+        parts.append(f"FY {' / '.join(fy_set)}")
+    for key, label in [
+        ("versions",""),("entities","Entity"),("cost_centers","CC"),
+        ("functional_areas","FA"),("accounts","Acct"),("profit_centers","PC"),
+    ]:
+        vals = filters.get(key, [])
+        if vals:
+            short = ", ".join(vals[:2]) + (f" +{len(vals)-2}" if len(vals) > 2 else "")
+            prefix = f"{label}: " if label else ""
+            parts.append(f"{prefix}{short}")
+    return " · ".join(parts) if parts else "No filters — showing all data"
+
+
+# ─── CORTEX ANALYST ──────────────────────────────────────────────────────────
+def call_analyst(filtered_question: str) -> dict | None:
+    body = {
+        "messages": [{
+            "role": "user",
+            "content": [{"type": "text", "text": filtered_question}],
+        }],
+        "semantic_model_file": SEMANTIC_MODEL_STAGE,
+    }
+    if _IN_SIS:
+        resp = _snowflake.send_snow_api_request(
+            "POST", ANALYST_ENDPOINT, {}, {}, body, {}, 45000
+        )
+        if resp.get("status") != 200:
+            st.error(f"Cortex Analyst error {resp.get('status')}: {resp.get('content','')}")
+            return None
+        return json.loads(resp["content"])
+    st.error("Cortex Analyst requires the SiS environment. Deploy to Snowflake Streamlit.")
+    return None
+
+
+def parse_analyst_response(resp: dict) -> tuple[str | None, str]:
+    sql, texts = None, []
+    for block in resp.get("message", {}).get("content", []):
+        if block.get("type") == "sql":
+            sql = block.get("statement", "").strip()
+        elif block.get("type") == "text":
+            texts.append(block.get("text", ""))
+    return sql, " ".join(texts).strip()
+
+
+# ─── SQL RUNNER ───────────────────────────────────────────────────────────────
+def run_query(sql: str) -> pd.DataFrame:
+    if _IN_SIS:
+        return session.sql(sql).to_pandas()
+    cur = session.cursor()
+    cur.execute(sql)
+    cols = [d[0] for d in cur.description]
+    return pd.DataFrame(cur.fetchall(), columns=cols)
+
+
+# ─── CHART DETECTION ─────────────────────────────────────────────────────────
+_TIME_RE = re.compile(r"period|month|year|date|time|quarter|cal_year", re.I)
+_VAR_RE  = re.compile(r"variance|delta|deviation|change|growth|pct|percent|ratio", re.I)
+
+def detect_chart(df: pd.DataFrame) -> str:
+    if df.empty or len(df.columns) < 2:
+        return "table"
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    str_cols = df.select_dtypes(exclude="number").columns.tolist()
+    if not num_cols:
+        return "table"
+    if len(df) == 1:
+        return "kpi"
+    if not str_cols and len(num_cols) == 2:
+        return "scatter"
+    time_cols = [c for c in str_cols if _TIME_RE.search(c)]
+    if time_cols and num_cols:
+        return "line"
+    if len(str_cols) == 1 and num_cols:
+        return "bar" if len(df) <= 20 else "hbar"
+    if len(str_cols) == 2 and len(num_cols) == 1:
+        return "grouped_bar"
+    var_cols = [c for c in num_cols if _VAR_RE.search(c)]
+    if var_cols and str_cols:
+        return "waterfall"
+    return "table"
+
+
+# ─── CHART BUILDER ───────────────────────────────────────────────────────────
+COLORS = ["#29B5E8","#0073B6","#00C4B3","#F97316","#8B5CF6",
+          "#10B981","#F59E0B","#EF4444","#6366F1","#14B8A6"]
+_LAYOUT = dict(
+    plot_bgcolor="white", paper_bgcolor="white",
+    font=dict(family="Inter, Helvetica Neue, sans-serif", size=12),
+    height=420, margin=dict(l=40,r=20,t=50,b=50),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    title_font_size=14,
+)
+
+def build_chart(df: pd.DataFrame, chart_type: str, question: str) -> go.Figure | None:
+    num_cols  = df.select_dtypes(include="number").columns.tolist()
+    str_cols  = df.select_dtypes(exclude="number").columns.tolist()
+    time_cols = [c for c in str_cols if _TIME_RE.search(c)]
+    title     = (question[:72] + "…") if len(question) > 72 else question
+    try:
+        if chart_type == "line" and time_cols and num_cols:
+            fig = px.line(df.sort_values(time_cols[0]), x=time_cols[0], y=num_cols,
+                          title=title, color_discrete_sequence=COLORS, markers=True)
+            fig.update_traces(line_width=2.5)
+
+        elif chart_type == "bar" and str_cols and num_cols:
+            df_s = df.sort_values(num_cols[0], ascending=False).head(25)
+            fig = px.bar(df_s, x=str_cols[0], y=num_cols, title=title,
+                         color_discrete_sequence=COLORS, barmode="group")
+
+        elif chart_type == "hbar" and str_cols and num_cols:
+            df_s = df.nlargest(25, num_cols[0])
+            fig = px.bar(df_s, x=num_cols[0], y=str_cols[0], orientation="h",
+                         title=title, color_discrete_sequence=[COLORS[0]])
+            fig.update_layout(yaxis={"categoryorder": "total ascending"})
+
+        elif chart_type == "grouped_bar" and len(str_cols) >= 2 and num_cols:
+            fig = px.bar(df, x=str_cols[0], y=num_cols[0], color=str_cols[1],
+                         title=title, barmode="group", color_discrete_sequence=COLORS)
+
+        elif chart_type == "waterfall" and str_cols and num_cols:
+            var_cols = [c for c in num_cols if _VAR_RE.search(c)]
+            y_col = var_cols[0] if var_cols else num_cols[0]
+            df_s  = df.sort_values(y_col)
+            fig   = go.Figure(go.Bar(
+                x=df_s[str_cols[0]], y=df_s[y_col],
+                marker_color=["#EF4444" if v > 0 else "#10B981" for v in df_s[y_col]],
+                text=[f"{v:+,.0f}" for v in df_s[y_col]], textposition="outside",
+            ))
+            fig.update_layout(title=title)
+
+        elif chart_type == "scatter" and len(num_cols) >= 2:
+            fig = px.scatter(df, x=num_cols[0], y=num_cols[1],
+                             hover_data=str_cols[:2] if str_cols else None,
+                             title=title, color_discrete_sequence=[COLORS[0]])
+        else:
+            return None
+
+        fig.update_layout(**_LAYOUT)
+        fig.update_xaxes(showgrid=False, tickangle=(-30 if chart_type != "hbar" else 0))
+        fig.update_yaxes(showgrid=True, gridcolor="#F3F4F6",
+                         zeroline=True, zerolinecolor="#E5E7EB")
+        return fig
+    except Exception:
+        return None
+
+
+# ─── KPI CARDS ───────────────────────────────────────────────────────────────
+def fmt_num(v: float) -> str:
+    if abs(v) >= 1_000_000_000: return f"{v/1_000_000_000:.2f}B"
+    if abs(v) >= 1_000_000:     return f"{v/1_000_000:.2f}M"
+    if abs(v) >= 1_000:         return f"{v/1_000:.1f}K"
+    return f"{v:,.2f}"
+
+def show_kpi_cards(df: pd.DataFrame):
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    cards = "".join(
+        f'<div class="kpi-card">'
+        f'<div class="kpi-label">{c.replace("_"," ").title()}</div>'
+        f'<div class="kpi-value">{fmt_num(df[c].iloc[0])}</div>'
+        f'</div>'
+        for c in num_cols[:6]
+    )
+    st.markdown(f'<div class="kpi-row">{cards}</div>', unsafe_allow_html=True)
+
+
+# ─── NARRATIVE ────────────────────────────────────────────────────────────────
+def generate_narrative(question: str, df: pd.DataFrame) -> str:
+    if df.empty:
+        return ""
+    top    = df.head(8).to_string(index=False, max_colwidth=30)
+    prompt = (
+        f'You are a senior financial analyst writing an executive insight.\n\n'
+        f'Question: "{question}"\n'
+        f'Result rows: {len(df)} | Columns: {", ".join(df.columns)}\n'
+        f'Sample data:\n{top}\n\n'
+        f'Write exactly 2-3 sentences. Be specific with numbers. '
+        f'Highlight the single most important finding. '
+        f'No preamble. Business language.'
+    )
+    try:
+        return Complete(NARRATIVE_MODEL, prompt) if _IN_SIS else "(Narrative: SiS only)"
+    except Exception as e:
+        return f"(Narrative error: {e})"
+
+
+# ─── SESSION STATE ────────────────────────────────────────────────────────────
+for k, v in [("history",[]), ("pending",""),
+              ("show_sql",False), ("show_narr",True), ("show_chart",True)]:
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+# ─── SIDEBAR ─────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 📊 OPEX Agent")
+    st.caption("Cost Analytics & Insights · CAI")
+    st.divider()
+
+    # ── TIME FILTERS ─────────────────────────────────────────────────────────
+    st.markdown("#### 📅 Time Period")
+
+    sel_years = st.multiselect(
+        "Fiscal Year",
+        options=fiscal_years(),
+        default=[default_year()],
+        help="FY starts October. FY2024 = Oct 2023 – Sep 2024.",
+    )
+    sel_quarters = st.multiselect(
+        "Quarter",
+        options=fiscal_quarters(),
+        default=[default_quarter()],
+        help="Q1=Oct-Dec · Q2=Jan-Mar · Q3=Apr-Jun · Q4=Jul-Sep",
+    )
+
+    # Month picker shows only months belonging to selected quarters
+    avail_months = available_months_for_quarters(sel_quarters)
+    sel_months = st.multiselect(
+        "Month (optional — narrows within quarter)",
+        options=avail_months,
+        default=[],
+        help="Leave empty to include all months in the selected quarters.",
+    )
+
+    active_periods = compute_periods(sel_years, sel_quarters, sel_months)
+    if active_periods:
+        st.caption(f"→ {len(active_periods)} period(s): "
+                   f"{active_periods[0]} … {active_periods[-1]}")
+    else:
+        st.caption("⚠ Select at least one year and quarter.")
+
+    st.divider()
+
+    # ── VERSION / SCENARIO ───────────────────────────────────────────────────
+    st.markdown("#### 📋 Version / Scenario")
+    sel_versions = st.multiselect(
+        "Version",
+        options=["ACTUAL", "BUDGET", "FORECAST"],
+        default=[],
+        help="Leave empty to include all versions (if your table has a VERSION column).",
+    )
+
+    st.divider()
+
+    # ── DIMENSION FILTERS ─────────────────────────────────────────────────────
+    st.markdown("#### 🏢 Dimensions")
+
+    with st.expander("Entity", expanded=False):
+        entity_opts = get_filter_values("entity")
+        sel_entities = st.multiselect(
+            "Entity", entity_opts, default=[], label_visibility="collapsed",
+            help="Legal entity / company code",
+        )
+
+    with st.expander("Cost Center", expanded=False):
+        cc_opts = get_filter_values("cost_center")
+        sel_cost_centers = st.multiselect(
+            "Cost Center", cc_opts, default=[], label_visibility="collapsed",
+        )
+
+    with st.expander("Functional Area", expanded=False):
+        fa_opts = get_filter_values("functional_area")
+        sel_functional_areas = st.multiselect(
+            "Functional Area", fa_opts, default=[], label_visibility="collapsed",
+        )
+
+    with st.expander("GL Account", expanded=False):
+        acct_opts = get_filter_values("account")
+        sel_accounts = st.multiselect(
+            "GL Account", acct_opts, default=[], label_visibility="collapsed",
+        )
+
+    with st.expander("Profit Center", expanded=False):
+        pc_opts = get_filter_values("profit_center")
+        sel_profit_centers = st.multiselect(
+            "Profit Center", pc_opts, default=[], label_visibility="collapsed",
+        )
+
+    st.divider()
+
+    # ── QUICK QUESTIONS ──────────────────────────────────────────────────────
+    st.markdown("#### ⚡ Quick Questions")
+    for i, q in enumerate(SUGGESTED_QUESTIONS):
+        label = q[:50] + ("…" if len(q) > 50 else "")
+        if st.button(label, key=f"sq{i}", use_container_width=True):
+            st.session_state["pending"] = q
+
+    st.divider()
+
+    # ── DISPLAY OPTIONS ──────────────────────────────────────────────────────
+    st.markdown("#### ⚙ Display")
+    st.session_state["show_sql"]   = st.toggle("Show generated SQL",     st.session_state["show_sql"])
+    st.session_state["show_narr"]  = st.toggle("AI narrative (Llama 3)", st.session_state["show_narr"])
+    st.session_state["show_chart"] = st.toggle("Auto-generate charts",   st.session_state["show_chart"])
+
+    st.divider()
+    if st.session_state["history"]:
+        if st.button("🗑 Clear conversation", use_container_width=True):
+            st.session_state["history"] = []
+            st.rerun()
+    st.caption("Snowflake Cortex Analyst · Llama 3.1-8b")
+
+
+# ─── ASSEMBLE ACTIVE FILTERS ──────────────────────────────────────────────────
+active_filters = {
+    "periods":         active_periods,
+    "versions":        sel_versions,
+    "entities":        sel_entities,
+    "cost_centers":    sel_cost_centers,
+    "functional_areas": sel_functional_areas,
+    "accounts":        sel_accounts,
+    "profit_centers":  sel_profit_centers,
+}
+
+
+# ─── MAIN HEADER ─────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="header-banner">
+  <h1>📊 OPEX Cost Analytics Agent</h1>
+  <p>Ask any question about operational expenditure — actuals, budget, forecast, variance</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Active filter badge
+st.markdown(
+    f'<div class="filter-badge">🔎 {filter_summary(active_filters)}</div>',
+    unsafe_allow_html=True,
+)
+
+
+# ─── CHAT HISTORY ─────────────────────────────────────────────────────────────
+for turn in st.session_state["history"]:
+    st.markdown(f'<div class="bubble-user">🙋 {turn["question"]}</div>',
+                unsafe_allow_html=True)
+
+    if turn.get("error"):
+        st.error(turn["error"])
+    else:
+        if turn.get("agent_text"):
+            st.markdown(f'<div class="bubble-agent">🤖 {turn["agent_text"]}</div>',
+                        unsafe_allow_html=True)
+
+        if st.session_state["show_sql"] and turn.get("sql"):
+            with st.expander("🔍 Generated SQL", expanded=False):
+                st.code(turn["sql"], language="sql")
+
+        df = turn.get("df")
+        if df is not None and not df.empty:
+            ctype = turn.get("chart_type", "table")
+
+            if st.session_state["show_chart"]:
+                if ctype == "kpi":
+                    show_kpi_cards(df)
+                elif ctype != "table":
+                    fig = build_chart(df, ctype, turn["question"])
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
+
+            with st.expander(f"📋 Data — {len(df):,} rows", expanded=(ctype == "table")):
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "⬇ Download CSV",
+                    df.to_csv(index=False).encode("utf-8"),
+                    "opex_export.csv", "text/csv",
+                    key=f"dl_{id(turn)}",
+                )
+
+            if st.session_state["show_narr"] and turn.get("narrative"):
+                st.markdown(
+                    f'<div class="narrative-box">💡 {turn["narrative"]}</div>',
+                    unsafe_allow_html=True,
+                )
+
+        elif df is not None and df.empty:
+            st.info("The query returned no rows for the active filters.")
+
+    st.markdown('<hr class="turn-divider">', unsafe_allow_html=True)
+
+
+# ─── INPUT ────────────────────────────────────────────────────────────────────
+col_q, col_btn = st.columns([6, 1])
+with col_q:
+    user_q = st.text_input(
+        "question",
+        value=st.session_state.get("pending", ""),
+        placeholder="e.g. Which cost centers are over budget by more than 15%?",
+        label_visibility="collapsed",
+        key="input_box",
+    )
+with col_btn:
+    go = st.button("Analyze →", type="primary", use_container_width=True)
+
+if st.session_state.get("pending"):
+    st.session_state["pending"] = ""
+
+
+# ─── PROCESS ──────────────────────────────────────────────────────────────────
+if go and user_q.strip():
+    question = user_q.strip()
+    turn: dict = {"question": question}
+
+    with st.spinner("Analyzing with active filters…"):
+        filtered_q = build_filtered_question(question, active_filters)
+        try:
+            resp = call_analyst(filtered_q)
+            if resp is None:
+                turn["error"] = "No response from Cortex Analyst."
+            else:
+                sql, agent_text = parse_analyst_response(resp)
+                turn["agent_text"] = agent_text
+                turn["sql"]        = sql
+
+                if sql:
+                    df = run_query(sql)
+                    turn["df"]         = df
+                    turn["chart_type"] = detect_chart(df)
+                    if st.session_state["show_narr"] and not df.empty:
+                        turn["narrative"] = generate_narrative(question, df)
+                else:
+                    turn["df"]         = pd.DataFrame()
+                    turn["chart_type"] = "table"
+
+        except Exception as exc:
+            turn["error"] = f"Unexpected error: {exc}"
+
+    st.session_state["history"].append(turn)
+    st.rerun()
