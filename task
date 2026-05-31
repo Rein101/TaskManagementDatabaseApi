@@ -31,7 +31,7 @@ except ImportError:
     _IN_SIS = False
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-SEMANTIC_MODEL_STAGE = "@ACC_PRD.COST_CENTER.CORTEX_STAGE/opex_semantic_model.yaml"
+SEMANTIC_MODEL_FILE  = "EDW_DEV.WH.TEST"          # ← semantic view (no @ prefix)
 NARRATIVE_MODEL      = "llama3.1-8b"
 ANALYST_ENDPOINT     = "/api/v2/cortex/analyst/message"
 
@@ -675,23 +675,20 @@ if go and user_q.strip():
     with st.spinner("Analyzing with active filters…"):
         filtered_q = build_filtered_question(question, active_filters)
         try:
-            resp = call_analyst(filtered_q)
-            if resp is None:
-                turn["error"] = "No response from Cortex Analyst."
-            else:
-                sql, agent_text = parse_analyst_response(resp)
-                turn["agent_text"] = agent_text
-                turn["sql"]        = sql
+            resp = call_analyst(filtered_q)           # raises on any API error
+            sql, agent_text = parse_analyst_response(resp)
+            turn["agent_text"] = agent_text
+            turn["sql"]        = sql
 
-                if sql:
-                    df = run_query(sql)
-                    turn["df"]         = df
-                    turn["chart_type"] = detect_chart(df)
-                    if st.session_state["show_narr"] and not df.empty:
-                        turn["narrative"] = generate_narrative(question, df)
-                else:
-                    turn["df"]         = pd.DataFrame()
-                    turn["chart_type"] = "table"
+            if sql:
+                df = run_query(sql)
+                turn["df"]         = df
+                turn["chart_type"] = detect_chart(df)
+                if st.session_state["show_narr"] and not df.empty:
+                    turn["narrative"] = generate_narrative(question, df)
+            else:
+                turn["df"]         = pd.DataFrame()
+                turn["chart_type"] = "table"
 
         except Exception as exc:
             turn["error"] = f"Unexpected error: {exc}"
