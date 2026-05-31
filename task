@@ -284,24 +284,26 @@ def filter_summary(filters: dict) -> str:
 
 
 # ─── CORTEX ANALYST ──────────────────────────────────────────────────────────
-def call_analyst(filtered_question: str) -> dict | None:
+def call_analyst(filtered_question: str) -> dict:
     body = {
         "messages": [{
             "role": "user",
             "content": [{"type": "text", "text": filtered_question}],
         }],
-        "semantic_model_file": SEMANTIC_MODEL_STAGE,
+        "semantic_model_file": SEMANTIC_MODEL_FILE,   # ← uses semantic view name
     }
-    if _IN_SIS:
-        resp = _snowflake.send_snow_api_request(
-            "POST", ANALYST_ENDPOINT, {}, {}, body, {}, 45000
+    if not _IN_SIS:
+        raise RuntimeError("Cortex Analyst requires the SiS environment.")
+    resp = _snowflake.send_snow_api_request(
+        "POST", ANALYST_ENDPOINT, {}, {}, body, {}, 45000
+    )
+    if resp.get("status") != 200:
+        # Raise so the real Cortex error is visible in the chat instead of
+        # being swallowed by st.rerun() after the spinner closes.
+        raise RuntimeError(
+            f"Cortex Analyst {resp.get('status')}: {resp.get('content', '(no detail)')}"
         )
-        if resp.get("status") != 200:
-            st.error(f"Cortex Analyst error {resp.get('status')}: {resp.get('content','')}")
-            return None
-        return json.loads(resp["content"])
-    st.error("Cortex Analyst requires the SiS environment. Deploy to Snowflake Streamlit.")
-    return None
+    return json.loads(resp["content"])
 
 
 def parse_analyst_response(resp: dict) -> tuple[str | None, str]:
