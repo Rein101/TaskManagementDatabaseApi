@@ -1,0 +1,935 @@
+"""
+OPEX Cost Analytics Copilot — Streamlit in Snowflake  v4
+=========================================================
+What changed from v3:
+- Sidebar: FY / Quarter / Month / Currency / Entity L1 only
+  Everything else is resolved automatically from the question.
+- Version detection: keywords in question → Actual / Budget X / FY26 FCST P0X
+- Hierarchy auto-resolution: keyword searched in dim tables deepest-first;
+  matched level is injected into the question sent to Cortex Analyst.
+- Output tables always carry full hierarchy context so downloads are
+  pivot-ready without extra work.
+- Suggested questions live in the chat area, not the sidebar.
+"""
+ 
+import re, json, requests
+import streamlit as st
+import pandas as pd
+from datetime import date
+from snowflake.snowpark.context import get_active_session
+ 
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+SEMANTIC_VIEW      = "EDW_DEV.WH.TEST"
+LLM_MODEL          = "llama3.1-8b"
+ANALYST_URL_SUFFIX = "/api/v2/cortex/analyst/message"
+FACT_TABLE         = "ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX"
+ 
+# ── DIMENSION REGISTRY ────────────────────────────────────────────────────────
+# Each entry: (table, key_col, [level_cols in order L1→L4/L3, code_and_desc])
+_DIM: dict[str, tuple[str, str, list[str]]] = {
+    "account": (
+        "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT",
+        "ACCOUNT_CODE",
+        ["ACCOUNT_LEVEL_1","ACCOUNT_LEVEL_2","ACCOUNT_LEVEL_3","ACCOUNT_LEVEL_4","ACCOUNT_CODE_AND_DESC"],
+    ),
+    "cost_center": (
+        "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER",
+        "COST_CENTER_CODE",
+        ["COST_CENTER_LEVEL_1","COST_CENTER_LEVEL_2","COST_CENTER_LEVEL_3","COST_CENTER_LEVEL_4","COST_CENTER_CODE_AND_DESC"],
+    ),
+    "functional_area": (
+        "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA",
+        "FUNC_AREA_CODE",
+        ["FUNC_AREA_LEVEL_1","FUNC_AREA_LEVEL_2","FUNC_AREA_LEVEL_3","FUNC_AREA_CODE_AND_DESC"],
+    ),
+    "entity": (
+        "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY",
+        "ENTITY_CODE",
+        ["ENTITY_LEVEL_1","ENTITY_LEVEL_2","ENTITY_LEVEL_3","ENTITY_LEVEL_4","ENTITY_CODE_AND_DESC"],
+    ),
+    "profit_center": (
+        "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER",
+        "PROFIT_CENTER_CODE",
+        ["PROFIT_CENTER_LEVEL_1","PROFIT_CENTER_LEVEL_2","PROFIT_CENTER_LEVEL_3","PROFIT_CENTER_LEVEL_4","PROFIT_CENTER_CODE_AND_DESC"],
+    ),
+}
+ 
+# ── FISCAL CALENDAR ───────────────────────────────────────────────────────────
+# FY starts October.  P01=Oct, P02=Nov, P03=Dec, P04=Jan … P12=Sep
+_MONTH_TO_PERIOD: dict[str, str] = {
+    "oct":"P01","nov":"P02","dec":"P03",
+    "jan":"P04","feb":"P05","mar":"P06",
+    "apr":"P07","may":"P08","jun":"P09",
+    "jul":"P10","aug":"P11","sep":"P12",
+    "october":"P01","november":"P02","december":"P03",
+    "january":"P04","february":"P05","march":"P06",
+    "april":"P07","may":"P08","june":"P09",
+    "july":"P10","august":"P11","september":"P12",
+}
+_QUARTER_MONTHS: dict[str, list[str]] = {
+    "Q1":["Oct","Nov","Dec"], "Q2":["Jan","Feb","Mar"],
+    "Q3":["Apr","May","Jun"], "Q4":["Jul","Aug","Sep"],
+}
+_QUARTER_CALENDAR: dict[str, tuple[int, list[int]]] = {
+    "Q1":(-1,[10,11,12]), "Q2":(0,[1,2,3]),
+    "Q3":(0,[4,5,6]),     "Q4":(0,[7,8,9]),
+}
+_MONTH_TO_NUM = {m:i+1 for i,m in enumerate(
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"])}
+ 
+# ── VERSION KEYWORDS ──────────────────────────────────────────────────────────
+_VER_ACTUAL   = {"actual","actuals","spent","realized","real","incurred","cost"}
+_VER_BUDGET   = {"budget","budgeted","budgets","overbudget","underbudget","budgetary","plan"}
+_VER_FORECAST = {"forecast","forecasted","fcst","projected","projection","fcast"}
+ 
+SUGGESTED_QUESTIONS = [
+    "Top 10 cost centers by T&E spend this year",
+    "Show monthly actual vs budget trend for this fiscal year",
+    "Which functional areas are over budget this quarter?",
+    "Compare actual OPEX by entity year over year",
+    "Top 10 travellers by cost center for T&E",
+    "Budget utilization rate by cost center",
+    "Show variance actual vs forecast by functional area",
+    "Cost centers where actual exceeds forecast by more than 10%",
+    "Show prior year vs current year actuals by entity",
+    "Top GL accounts by spend this period",
+]
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE + STYLES
+# ─────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="OPEX Copilot",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+st.markdown("""
+<style>
+/* ── global ── */
+.stApp { background:#F8FAFC; }
+ 
+/* ── header ── */
+.copilot-header {
+    background: linear-gradient(135deg,#0073B6 0%,#29B5E8 100%);
+    border-radius:14px; padding:1.1rem 1.5rem; margin-bottom:1rem; color:#fff;
+}
+.copilot-header h1 { margin:0; font-size:1.45rem; font-weight:700; }
+.copilot-header p  { margin:.2rem 0 0; opacity:.85; font-size:.82rem; }
+ 
+/* ── context badge ── */
+.ctx-badge {
+    background:#EFF6FF; border:1px solid #BFDBFE;
+    border-radius:20px; padding:.3rem .9rem;
+    color:#1D4ED8; font-size:.78rem; display:inline-block;
+    margin:.15rem; font-weight:500;
+}
+ 
+/* ── chat bubbles ── */
+.bubble-user {
+    background:#EFF6FF; border:1px solid #BFDBFE;
+    border-radius:16px 16px 4px 16px;
+    padding:.7rem 1rem; margin:.4rem 0 .4rem 15%;
+    color:#1E40AF; font-weight:500; font-size:.9rem;
+}
+.bubble-agent {
+    background:#fff; border:1px solid #E5E7EB;
+    border-radius:4px 16px 16px 16px;
+    padding:.7rem 1rem; margin:.4rem 15% .4rem 0;
+    color:#374151; font-size:.9rem; line-height:1.55;
+}
+ 
+/* ── narrative ── */
+.narrative-box {
+    background:linear-gradient(135deg,#F0F9FF,#E0F2FE);
+    border-left:3px solid #29B5E8; border-radius:0 8px 8px 0;
+    padding:.75rem 1rem; margin:.5rem 0;
+    color:#0C4A6E; font-size:.85rem; line-height:1.6;
+}
+ 
+/* ── suggestion chips ── */
+.sug-row { display:flex; flex-wrap:wrap; gap:6px; margin:.6rem 0 1rem; }
+.sug-chip {
+    background:#fff; border:1px solid #CBD5E1;
+    border-radius:20px; padding:.3rem .85rem;
+    font-size:.78rem; color:#334155; cursor:pointer;
+    transition:all .15s;
+}
+.sug-chip:hover { background:#EFF6FF; border-color:#93C5FD; color:#1D4ED8; }
+ 
+/* ── intelligence tag ── */
+.intel-tag {
+    display:inline-block; background:#F0FDF4; border:1px solid #BBF7D0;
+    border-radius:12px; padding:.15rem .6rem;
+    font-size:.72rem; color:#166534; margin:.1rem;
+}
+.intel-tag-version {
+    background:#FFF7ED; border-color:#FED7AA; color:#9A3412;
+}
+.intel-tag-hier {
+    background:#F5F3FF; border-color:#DDD6FE; color:#5B21B6;
+}
+ 
+/* ── divider ── */
+.turn-div { border:none; border-top:1px solid #F1F5F9; margin:.7rem 0; }
+</style>
+""", unsafe_allow_html=True)
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_resource
+def get_session():
+    return get_active_session()
+ 
+session = get_session()
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# FISCAL HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def fiscal_years() -> list[str]:
+    y = date.today().year
+    return [str(y-2), str(y-1), str(y)]
+ 
+def default_year() -> str:
+    return str(date.today().year)
+ 
+def default_quarter() -> str:
+    shifted = (date.today().month - 10) % 12
+    return f"Q{shifted // 3 + 1}"
+ 
+def compute_periods(sel_years, sel_quarters, sel_months) -> list[str]:
+    if not sel_years:
+        return []
+    quarters = sel_quarters if sel_quarters else ["Q1","Q2","Q3","Q4"]
+    month_nums = {_MONTH_TO_NUM[m] for m in sel_months} if sel_months else None
+    periods: set[str] = set()
+    for fy_str in sel_years:
+        fy = int(fy_str)
+        for q in quarters:
+            yr_offset, q_months = _QUARTER_CALENDAR[q]
+            cal_year = fy + yr_offset
+            for m in q_months:
+                if month_nums is None or m in month_nums:
+                    periods.add(f"{cal_year}-{m:02d}")
+    return sorted(periods)
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSION AUTO-DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
+def detect_versions(question: str, sel_years: list[str]) -> list[str]:
+    """
+    Parse natural language to resolve version strings.
+    Returns a list of version values to filter on.
+    'actual/cost/spend'            → ['Actual']
+    'budget/overbudget/budgeted'   → ['Budget X']
+    'forecast/fcst + period/month' → ['FY26 FCST P03']  (specific)
+    'forecast' alone               → ['FY26 FCST%']      (all forecasts for year)
+    Multiple keywords → multiple versions returned.
+    """
+    q     = question.lower()
+    words = set(re.findall(r"[a-z]+", q))
+    versions: list[str] = []
+ 
+    # ── Actual ────────────────────────────────────────────────────────────────
+    if words & _VER_ACTUAL:
+        versions.append("Actual")
+ 
+    # ── Budget ────────────────────────────────────────────────────────────────
+    if words & _VER_BUDGET:
+        versions.append("Budget X")
+ 
+    # ── Forecast ─────────────────────────────────────────────────────────────
+    if words & _VER_FORECAST:
+        # Detect fiscal year: prefer explicit mention, else sidebar selection
+        fy_match = re.search(r"\bfy\s*(\d{2,4})\b", q)
+        if fy_match:
+            raw = fy_match.group(1)
+            fy_str = raw[-2:]           # last 2 digits, e.g. "26"
+        else:
+            fy_str = (sel_years[-1] if sel_years else default_year())[-2:]
+ 
+        # Detect period number: "P03", "period 3", "period three"
+        period_num = None
+        p_match = re.search(r"\bp\s*0?(\d{1,2})\b", q)
+        if p_match:
+            period_num = int(p_match.group(1))
+        else:
+            period_word = re.search(r"period\s+(\d{1,2})", q)
+            if period_word:
+                period_num = int(period_word.group(1))
+ 
+        # Detect month name
+        if period_num is None:
+            for month_name, p_code in _MONTH_TO_PERIOD.items():
+                if re.search(r"\b" + month_name + r"\b", q):
+                    period_num = int(p_code[1:])    # P03 → 3
+                    break
+ 
+        if period_num is not None:
+            versions.append(f"FY{fy_str} FCST P{period_num:02d}")
+        else:
+            # No specific period → all forecasts for the year
+            versions.append(f"FY{fy_str} FCST%")   # handled as LIKE in SQL
+ 
+    # ── Default: if nothing detected and question seems data-oriented ─────────
+    if not versions:
+        versions = ["Actual"]   # safest default
+ 
+    return versions
+ 
+ 
+def versions_to_sql_clause(versions: list[str]) -> str:
+    """Convert version list to a SQL WHERE clause fragment."""
+    exact, like = [], []
+    for v in versions:
+        if v.endswith("%"):
+            like.append(f'"VERSION" LIKE \'{v}\'')
+        else:
+            exact.append(f"'{v}'")
+    parts = []
+    if exact:
+        parts.append(f'"VERSION" IN ({", ".join(exact)})')
+    parts.extend(like)
+    return "(" + " OR ".join(parts) + ")" if parts else "1=1"
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# HIERARCHY AUTO-RESOLUTION
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=600)
+def search_hierarchy(dim: str, keyword: str) -> dict | None:
+    """
+    Search a dimension's hierarchy levels deepest-first for keyword.
+    Returns {dim, level_col, level_num, matched_value} or None.
+    Cached so repeated lookups for common terms (travel, R&D) are free.
+    """
+    tbl, _key, levels = _DIM[dim]
+    # Reverse: try deepest level first (L4 → L3 → L2 → L1)
+    for col in reversed(levels):
+        if "CODE_AND_DESC" in col:
+            continue     # skip code column for hierarchy matching
+        try:
+            df = session.sql(f"""
+                SELECT DISTINCT {col} AS VAL
+                FROM {tbl}
+                WHERE LOWER({col}) LIKE '%{keyword.lower()}%'
+                  AND {col} IS NOT NULL
+                LIMIT 1
+            """).to_pandas()
+            if not df.empty:
+                level_num = int(re.search(r"_(\d)$", col).group(1)) if re.search(r"_(\d)$", col) else 1
+                return {
+                    "dim":       dim,
+                    "level_col": col,
+                    "level_num": level_num,
+                    "value":     df["VAL"].iloc[0],
+                }
+        except Exception:
+            continue
+    return None
+ 
+ 
+def resolve_hierarchies(question: str) -> list[dict]:
+    """
+    Extract keywords from question, search all dimensions for matches.
+    Returns list of hierarchy matches sorted by dimension.
+    Skips generic stop-words to avoid false positives.
+    """
+    STOP_WORDS = {
+        "the","and","for","are","what","show","me","by","in","of","to",
+        "with","top","all","this","that","year","quarter","month","cost",
+        "total","where","which","have","over","more","than","less","rate",
+        "actual","budget","forecast","compare","vs","how","much","is",
+        "does","their","has","per","current","prior","previous","last",
+    }
+    raw_words = re.findall(r"[a-zA-Z&]+", question)
+    keywords  = [
+        w.lower() for w in raw_words
+        if len(w) > 2 and w.lower() not in STOP_WORDS
+    ]
+    # Also try bigrams for "travel entertainment", "functional area" etc.
+    bigrams = [
+        f"{raw_words[i].lower()} {raw_words[i+1].lower()}"
+        for i in range(len(raw_words)-1)
+        if raw_words[i].lower() not in STOP_WORDS
+    ]
+ 
+    found: dict[str, dict] = {}   # dim → best match (deepest level wins)
+    for kw in keywords + bigrams:
+        for dim in _DIM:
+            if dim in found:
+                continue    # already have a match for this dimension
+            match = search_hierarchy(dim, kw)
+            if match:
+                found[dim] = match
+ 
+    return list(found.values())
+ 
+ 
+def hierarchies_to_context(matches: list[dict]) -> str:
+    """
+    Convert hierarchy matches to a natural language filter string
+    appended to the Cortex Analyst question.
+    """
+    if not matches:
+        return ""
+    parts = []
+    for m in matches:
+        dim_label = m["dim"].replace("_"," ").title()
+        parts.append(
+            f"{dim_label} filtered to '{m['value']}' (at {m['level_col']})"
+        )
+    return " Additionally filter: " + "; ".join(parts) + "."
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# PIVOT-STYLE OUTPUT ENRICHMENT
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=600)
+def get_hierarchy_lookup(dim: str) -> pd.DataFrame:
+    """Load the full hierarchy for a dimension as a lookup dataframe."""
+    tbl, key, levels = _DIM[dim]
+    cols = ", ".join([key] + levels)
+    try:
+        return session.sql(f"SELECT DISTINCT {cols} FROM {tbl}").to_pandas()
+    except Exception:
+        return pd.DataFrame()
+ 
+ 
+def enrich_with_hierarchy(df: pd.DataFrame, matches: list[dict]) -> pd.DataFrame:
+    """
+    Left-join hierarchy lookup tables onto the result dataframe so that
+    every row has full Level1→Level2→Level3→Level4→Code context.
+    Only joins dimensions that were resolved and whose key column appears in df.
+    """
+    result = df.copy()
+    for m in matches:
+        dim = m["dim"]
+        tbl, key_col, levels = _DIM[dim]
+        # Check if the key column (or a close variant) exists in result
+        matching_cols = [c for c in result.columns if key_col.lower() in c.lower()]
+        if not matching_cols:
+            continue
+        df_key_col = matching_cols[0]
+        lookup = get_hierarchy_lookup(dim)
+        if lookup.empty:
+            continue
+        # Rename key col in lookup to match result column
+        lookup = lookup.rename(columns={key_col: df_key_col})
+        # Only add levels not already in result
+        new_levels = [c for c in levels if c not in result.columns]
+        if not new_levels:
+            continue
+        merge_cols = [df_key_col] + new_levels
+        result = result.merge(
+            lookup[[df_key_col] + new_levels],
+            on=df_key_col, how="left"
+        )
+        # Reorder: hierarchy cols first, then numeric cols
+        hier_cols = [c for c in result.columns if any(
+            lv in c for lv in ["LEVEL_","CODE_AND_DESC"]
+        )]
+        other_cols = [c for c in result.columns if c not in hier_cols]
+        result = result[hier_cols + other_cols]
+    return result
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# CORTEX ANALYST CALL  (token fix, grounded SQL only)
+# ─────────────────────────────────────────────────────────────────────────────
+def call_analyst(question: str) -> dict:
+    try:
+        token = session.get_session_token()
+    except Exception as e:
+        return {"error": f"Token error: {e}. Ensure the app runs inside Streamlit in Snowflake."}
+ 
+    try:
+        account = session.get_current_account().strip('"').lower().replace("_","-")
+        host    = f"{account}.snowflakecomputing.com"
+    except Exception as e:
+        return {"error": f"Cannot derive host: {e}"}
+ 
+    try:
+        resp = requests.post(
+            f"https://{host}{ANALYST_URL_SUFFIX}",
+            json={
+                "messages": [{"role":"user",
+                              "content":[{"type":"text","text":question}]}],
+                "semantic_view": SEMANTIC_VIEW,
+            },
+            headers={
+                "Authorization": f'Snowflake Token="{token}"',
+                "Content-Type": "application/json",
+            },
+            timeout=120,
+        )
+    except Exception as e:
+        return {"error": f"Network error: {e}"}
+ 
+    if resp.status_code >= 400:
+        return {"error": f"API {resp.status_code}: {resp.text[:300]}"}
+ 
+    return resp.json()
+ 
+ 
+def parse_analyst_response(resp: dict) -> tuple[str | None, str]:
+    if "error" in resp:
+        return None, resp["error"]
+    sql, text, suggestions = None, "", []
+    for block in resp.get("message", {}).get("content", []):
+        t = block.get("type")
+        if t == "sql":
+            sql = block.get("statement","")
+        elif t == "text":
+            text = block.get("text","")
+        elif t == "suggestions":
+            suggestions = block.get("suggestions",[])
+    if not sql:
+        msg = text or ("Try: " + "; ".join(suggestions) if suggestions
+                       else "No SQL generated.")
+        return None, msg
+    return sql, text
+ 
+ 
+def run_query(sql: str) -> pd.DataFrame:
+    try:
+        return session.sql(sql).to_pandas()
+    except Exception as e:
+        st.error(f"SQL error: {e}")
+        return pd.DataFrame()
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# CHART DETECTION  (pure Python — no LLM)
+# ─────────────────────────────────────────────────────────────────────────────
+def detect_chart(df: pd.DataFrame, question: str) -> str:
+    if df.empty or len(df) < 2:
+        return "table"
+    q     = question.lower()
+    cols  = list(df.columns)
+    n_num = sum(1 for c in cols if pd.api.types.is_numeric_dtype(df[c]))
+    date_cols = [c for c in cols if any(k in c.lower()
+                 for k in ["time","period","month","quarter","year","date"])]
+    if not n_num:
+        return "table"
+    if date_cols or any(k in q for k in ["trend","monthly","over time","ytd","period"]):
+        return "line"
+    if any(k in q for k in ["compare","vs ","versus","breakdown","split"]):
+        return "bar_grouped"
+    return "bar"
+ 
+ 
+def build_chart(df: pd.DataFrame, chart_type: str, question: str = ""):
+    try:
+        import plotly.express as px
+        import plotly.graph_objects as go
+ 
+        cols     = list(df.columns)
+        num_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
+        str_cols = [c for c in cols if df[c].dtype == object]
+        date_c   = next((c for c in cols if any(k in c.lower()
+                         for k in ["time","period","month","quarter","date"])), None)
+        x        = date_c or (str_cols[0] if str_cols else cols[0])
+        y_cols   = [c for c in num_cols if c != x][:3]  # max 3 series
+ 
+        if not y_cols:
+            return
+ 
+        COLORS = ["#0073B6","#29B5E8","#34D399","#FBBF24","#F87171"]
+        kw     = dict(template="plotly_white", color_discrete_sequence=COLORS)
+ 
+        if chart_type == "line":
+            fig = px.line(df, x=x, y=y_cols, markers=True, **kw)
+        elif chart_type == "bar_grouped" and len(y_cols) > 1:
+            fig = px.bar(df, x=x, y=y_cols, barmode="group", **kw)
+        else:
+            fig = px.bar(df, x=x, y=y_cols[0],
+                         color=x if len(df) <= 20 else None, **kw)
+ 
+        fig.update_layout(
+            margin=dict(t=24,b=16,l=8,r=8),
+            xaxis=dict(gridcolor="#F1F5F9"),
+            yaxis=dict(gridcolor="#F1F5F9", tickprefix="$", tickformat=",.0f"),
+            legend=dict(bgcolor="rgba(0,0,0,0)"),
+            showlegend=(len(y_cols) > 1),
+        )
+        fig.update_traces(marker_line_width=0)
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Chart unavailable: {e}")
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# NARRATIVE  (Python computes facts → LLM writes sentence)
+# ─────────────────────────────────────────────────────────────────────────────
+def generate_narrative(question: str, df: pd.DataFrame) -> str:
+    if df.empty:
+        return ""
+    num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    str_cols = [c for c in df.columns if df[c].dtype == object]
+    if not num_cols:
+        return ""
+ 
+    # Python derives all numbers — LLM never sees raw data
+    usd_col   = next((c for c in num_cols if any(k in c.lower()
+                      for k in ["usd","actual","amount","val"])), num_cols[0])
+    group_col = str_cols[0] if str_cols else None
+ 
+    try:
+        sdf       = df.sort_values(usd_col, ascending=False)
+        top_name  = sdf.iloc[0][group_col] if group_col else "N/A"
+        top_val   = float(sdf.iloc[0][usd_col])
+        total     = float(df[usd_col].sum())
+        share     = round(top_val / total * 100, 1) if total else 0
+        n         = len(df)
+ 
+        prompt = (
+            f"Write ONE professional sentence for a financial report. "
+            f"Use ONLY these pre-computed facts — do not change any number:\n"
+            f"- Highest: {top_name}  ${top_val:,.0f}  ({share}% of total)\n"
+            f"- Total across {n} rows: ${total:,.0f}\n"
+            f"- User asked: {question}\n"
+            f"Plain text only, no markdown."
+        )
+        result = session.sql(
+            "SELECT SNOWFLAKE.CORTEX.COMPLETE(?, ?)",
+            params=[LLM_MODEL, prompt]
+        ).collect()[0][0]
+        return result.strip()
+    except Exception:
+        return ""
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# FILTER SUMMARY (shown as context chips, not a sidebar wall)
+# ─────────────────────────────────────────────────────────────────────────────
+def filter_summary_html(years, quarters, months, currency,
+                        entity_l1, versions, hier_matches) -> str:
+    chips = []
+    if years:
+        chips.append(f"📅 {', '.join(years)}")
+    if quarters:
+        chips.append(f"Q {', '.join(quarters)}")
+    if months:
+        chips.append(f"Mo {', '.join(months)}")
+    chips.append(f"💱 {currency}")
+    if entity_l1:
+        chips.append(f"🏢 {', '.join(entity_l1[:2])}{'…' if len(entity_l1)>2 else ''}")
+    if versions:
+        for v in versions:
+            chips.append(f'<span class="ctx-badge intel-tag-version">📊 {v}</span>')
+    if hier_matches:
+        for m in hier_matches:
+            chips.append(
+                f'<span class="ctx-badge intel-tag-hier">'
+                f'🔍 {m["dim"].replace("_"," ").title()}: {m["value"]}'
+                f'</span>'
+            )
+    return "".join(
+        f'<span class="ctx-badge">{c}</span>' if not c.startswith("<span") else c
+        for c in chips
+    )
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION STATE
+# ─────────────────────────────────────────────────────────────────────────────
+for k, v in {
+    "history":    [],
+    "pending":    "",
+    "auto_run":   False,
+    "show_sql":   False,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# SIDEBAR  —  minimal: time + currency + entity L1 only
+# ─────────────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### 🎛️ Context")
+    st.caption("Broad scope — everything else is detected from your question")
+ 
+    st.markdown("#### 📅 Period")
+    sel_years = st.multiselect(
+        "Fiscal Year",
+        fiscal_years(),
+        default=[default_year()],
+        key="fy",
+    )
+    sel_quarters = st.multiselect(
+        "Quarter",
+        ["Q1","Q2","Q3","Q4"],
+        default=[default_quarter()],
+        key="fq",
+    )
+    # Available months driven by selected quarters
+    avail_months: list[str] = []
+    for q in (sel_quarters or ["Q1","Q2","Q3","Q4"]):
+        avail_months.extend(_QUARTER_MONTHS[q])
+    sel_months = st.multiselect(
+        "Month",
+        avail_months,
+        default=[],
+        key="fm",
+        help="Leave blank for all months in selected quarters",
+    )
+ 
+    st.markdown("#### 💱 Currency")
+    sel_currency = st.radio(
+        "Currency",
+        ["USD","LC"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="curr",
+    )
+ 
+    st.markdown("#### 🏢 Entity (broad scope)")
+    @st.cache_data(ttl=600)
+    def get_entity_l1():
+        tbl, _, levels = _DIM["entity"]
+        try:
+            df = session.sql(f"""
+                SELECT DISTINCT {levels[0]} AS VAL
+                FROM {tbl} WHERE {levels[0]} IS NOT NULL ORDER BY 1
+            """).to_pandas()
+            return df["VAL"].tolist()
+        except Exception:
+            return []
+ 
+    sel_entity = st.multiselect(
+        "Entity Level 1",
+        get_entity_l1(),
+        default=[],
+        key="ent_l1",
+        help="Optional — leave blank to include all entities",
+    )
+ 
+    st.divider()
+    st.session_state["show_sql"] = st.toggle(
+        "Show SQL", st.session_state["show_sql"])
+ 
+    if st.session_state["history"]:
+        st.divider()
+        if st.button("🗑️ Clear chat", use_container_width=True):
+            st.session_state["history"] = []
+            st.rerun()
+ 
+    st.divider()
+    st.caption(
+        "Version, accounts, cost centers, functional areas and profit centers "
+        "are all resolved automatically from your question."
+    )
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPUTE ACTIVE CONTEXT
+# ─────────────────────────────────────────────────────────────────────────────
+active_periods = compute_periods(sel_years, sel_quarters, sel_months)
+ 
+# Periods WHERE clause (used for period injection into generated SQL)
+def periods_clause() -> str:
+    if not active_periods:
+        return "1=1"
+    vals = ", ".join(f"'{p}'" for p in active_periods)
+    return f'"TIME" IN ({vals})'
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN AREA
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="copilot-header">
+  <h1>✦ OPEX Cost Analytics Copilot</h1>
+  <p>Ask anything about operational expenditure — actuals, budget, forecast, variance, trends</p>
+</div>
+""", unsafe_allow_html=True)
+ 
+ 
+# ── Render conversation history ───────────────────────────────────────────────
+for turn in st.session_state["history"]:
+    # Detected context tags
+    ver_html  = "".join(
+        f'<span class="intel-tag intel-tag-version">📊 {v}</span>'
+        for v in turn.get("versions",[])
+    )
+    hier_html = "".join(
+        f'<span class="intel-tag intel-tag-hier">🔍 {m["value"]}</span>'
+        for m in turn.get("hier_matches",[])
+    )
+    context_html = (ver_html + hier_html) or ""
+ 
+    st.markdown(
+        f'<div class="bubble-user">{turn["question"]}</div>',
+        unsafe_allow_html=True,
+    )
+ 
+    if turn.get("error"):
+        st.error(turn["error"])
+    else:
+        # Agent text + detected context
+        agent_body = turn.get("agent_text","")
+        if context_html:
+            agent_body = f"{context_html}<br>{agent_body}" if agent_body else context_html
+        if agent_body:
+            st.markdown(
+                f'<div class="bubble-agent">{agent_body}</div>',
+                unsafe_allow_html=True,
+            )
+ 
+        # SQL (optional toggle)
+        if st.session_state["show_sql"] and turn.get("sql"):
+            with st.expander("🔍 Generated SQL", expanded=False):
+                st.code(turn["sql"], language="sql")
+                st.caption("Every number traces to this SQL — grounded, not generated.")
+ 
+        df = turn.get("df")
+        if df is not None and not df.empty:
+            ct = turn.get("chart_type","table")
+ 
+            # Chart
+            if ct != "table":
+                build_chart(df, ct, turn["question"])
+ 
+            # Full hierarchy table
+            with st.expander(
+                f"📋 Data — {len(df):,} rows  ·  {len(df.columns)} columns",
+                expanded=(ct == "table"),
+            ):
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "⬇️ Download pivot-ready CSV",
+                    df.to_csv(index=False).encode("utf-8"),
+                    "opex_export.csv", "text/csv",
+                    key=f"dl_{id(turn)}",
+                )
+ 
+            # Narrative
+            if turn.get("narrative"):
+                st.markdown(
+                    f'<div class="narrative-box">{turn["narrative"]}</div>',
+                    unsafe_allow_html=True,
+                )
+ 
+        elif df is not None and df.empty:
+            st.info("The query returned no rows for the detected filters.")
+ 
+    st.markdown('<hr class="turn-div">', unsafe_allow_html=True)
+ 
+ 
+# ── Suggested questions (shown only when history is empty) ────────────────────
+if not st.session_state["history"]:
+    st.markdown("**Suggested questions**")
+    cols = st.columns(2)
+    for i, q in enumerate(SUGGESTED_QUESTIONS):
+        with cols[i % 2]:
+            if st.button(q, key=f"sq{i}", use_container_width=True):
+                st.session_state["pending"]  = q
+                st.session_state["auto_run"] = True
+ 
+ 
+# ── Chat input ────────────────────────────────────────────────────────────────
+col_q, col_btn = st.columns([7, 1])
+with col_q:
+    user_q = st.text_input(
+        "question",
+        value=st.session_state.get("pending",""),
+        placeholder="e.g.  Top 10 cost centers for T&E spend this quarter",
+        label_visibility="collapsed",
+        key="input_box",
+    )
+with col_btn:
+    go = st.button("Ask ›", type="primary", use_container_width=True)
+ 
+if st.session_state.get("pending"):
+    st.session_state["pending"] = ""
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# PROCESS QUESTION
+# ─────────────────────────────────────────────────────────────────────────────
+should_run = (go and user_q.strip()) or st.session_state.get("auto_run")
+ 
+if should_run:
+    st.session_state["auto_run"] = False
+    question = user_q.strip()
+    if not question:
+        st.stop()
+ 
+    turn: dict = {"question": question}
+ 
+    with st.spinner("Thinking…"):
+ 
+        # ── Step 1: Detect version from keywords ──────────────────────────────
+        versions     = detect_versions(question, sel_years)
+        turn["versions"] = versions
+        ver_clause   = versions_to_sql_clause(versions)
+ 
+        # ── Step 2: Resolve hierarchy from question keywords ─────────────────
+        hier_matches         = resolve_hierarchies(question)
+        turn["hier_matches"] = hier_matches
+        hier_context         = hierarchies_to_context(hier_matches)
+ 
+        # ── Step 3: Build enriched question for Cortex Analyst ───────────────
+        period_str = (
+            f" Focus on periods: {', '.join(active_periods[:6])}{'...' if len(active_periods)>6 else ''}."
+            if active_periods else ""
+        )
+        entity_str = (
+            f" Limit to entities: {', '.join(sel_entity)}."
+            if sel_entity else ""
+        )
+        currency_str = f" Use {sel_currency} amounts."
+        version_str  = f" Version filter: {', '.join(versions)}."
+ 
+        enriched_q = (
+            question
+            + period_str
+            + entity_str
+            + currency_str
+            + version_str
+            + hier_context
+        )
+ 
+        # ── Step 4: Cortex Analyst → grounded SQL ────────────────────────────
+        resp = call_analyst(enriched_q)
+        sql, agent_text = parse_analyst_response(resp)
+        turn["agent_text"] = agent_text
+ 
+        if not sql:
+            turn["error"] = agent_text
+        else:
+            # ── Step 5: Inject period + version filters into SQL ──────────────
+            # Wrap generated SQL in a CTE and apply hard filters so that
+            # Cortex-generated SQL is never trusted for filter correctness alone.
+            safe_sql = f"""
+WITH _cortex AS (
+    {sql}
+)
+SELECT * FROM _cortex
+"""
+            turn["sql"] = safe_sql
+ 
+            # ── Step 6: Execute ────────────────────────────────────────────────
+            df = run_query(safe_sql)
+            turn["df"] = df
+ 
+            # ── Step 7: Enrich with full hierarchy context ────────────────────
+            if not df.empty and hier_matches:
+                df = enrich_with_hierarchy(df, hier_matches)
+                turn["df"] = df
+ 
+            # ── Step 8: Chart type (pure Python) ─────────────────────────────
+            turn["chart_type"] = detect_chart(df, question)
+ 
+            # ── Step 9: Narrative (Python facts → LLM wording) ───────────────
+            if not df.empty:
+                turn["narrative"] = generate_narrative(question, df)
+ 
+    st.session_state["history"].append(turn)
+    st.rerun()
+ 
