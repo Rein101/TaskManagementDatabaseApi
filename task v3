@@ -1,0 +1,790 @@
+# V3 that works
+import streamlit as st
+import pandas as pd
+import json
+import re
+import requests
+from datetime import date
+
+from snowflake.snowpark.context import get_active_session
+
+try:
+    import _snowflake
+    IN_SIS = True
+except ImportError:
+    IN_SIS = False
+
+SEMANTIC_VIEW = "EDW_DEV.WH.TEST"
+LLM_MODEL = "llama3.1-8b"
+ANALYST_URL_SUFFIX = "/api/v2/cortex/analyst/message"
+
+_DIM_TABLES: dict[str, tuple[str, str]] = {
+    "entity":          ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY",        "ENTITY_CODE"),
+    "cost_center":     ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER",   "COST_CENTER_CODE"),
+    "functional_area": ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA",     "FUNCTIONAL_AREA_CODE"),
+    "account":         ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT",       "ACCOUNT_CODE"),
+    "profit_center":   ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER", "PROFIT_CENTER_CODE"),
+}
+
+_QUARTER_CALENDAR: dict[str, tuple[int, list[int]]] = {
+    "Q1": (-1, [10, 11, 12]),
+    "Q2": ( 0, [ 1,  2,  3]),
+    "Q3": ( 0, [ 4,  5,  6]),
+    "Q4": ( 0, [ 7,  8,  9]),
+}
+_QUARTER_MONTH_ABBRS: dict[str, list[str]] = {
+    "Q1": ["Oct", "Nov", "Dec"],
+    "Q2": ["Jan", "Feb", "Mar"],
+    "Q3": ["Apr", "May", "Jun"],
+    "Q4": ["Jul", "Aug", "Sep"],
+}
+_MONTH_TO_NUM = {m: i+1 for i, m in enumerate(
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+)}
+
+SUGGESTED_QUESTIONS = [
+    "What are the top 10 cost centers by total OPEX?",
+    "Show monthly actual vs budget trend",
+    "Which functional areas have the highest variance vs budget?",
+    "Compare actual OPEX by entity",
+    "Top 5 cost centers by Travel and Entertainment spend",
+    "Top 10 travellers by cost center for T&E",
+    "Month-over-month T&E trend by entity",
+    "Show variance actual vs budget by functional area sorted by largest overspend",
+    "Cost centers where actual exceeds forecast by more than 10%",
+    "Budget utilization rate by cost center",
+    "Year-over-year OPEX comparison by entity",
+    "Top GL accounts by spend in the selected period",
+    "Show prior year vs current year actuals",
+]
+
+st.set_page_config(page_title="OPEX Cost Analytics Agent", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown("""
+<style>
+  .header-banner {
+      background: linear-gradient(135deg, #29B5E8 0%, #0073B6 100%);
+      padding: 1.2rem 1.6rem; border-radius: 12px;
+      margin-bottom: 1rem; color: white;
+  }
+  .header-banner h1 { margin:0; font-size:1.55rem; font-weight:700; }
+  .header-banner p  { margin:0.2rem 0 0; opacity:.88; font-size:.88rem; }
+  .filter-badge {
+      background:#F0F9FF; border:1px solid #BAE6FD;
+      border-radius:8px; padding:.45rem .8rem;
+      color:#0369A1; font-size:.8rem; margin-bottom:.8rem;
+  }
+  .kpi-row { display:flex; gap:10px; flex-wrap:wrap; margin:.5rem 0; }
+  .kpi-card {
+      flex:1; min-width:150px; background:white;
+      border:1px solid #E5E7EB; border-radius:10px;
+      padding:.85rem 1rem; box-shadow:0 1px 5px rgba(0,0,0,.06);
+  }
+  .kpi-label { color:#6B7280; font-size:.72rem; font-weight:600;
+               text-transform:uppercase; letter-spacing:.5px; }
+  .kpi-value { color:#111827; font-size:1.5rem; font-weight:700; margin-top:.12rem; }
+  .bubble-user {
+      background:#EFF6FF; border:1px solid #BFDBFE;
+      border-radius:14px 14px 4px 14px;
+      padding:.7rem .95rem; margin:.35rem 0;
+      color:#1E40AF; font-weight:500;
+  }
+  .bubble-agent {
+      background:#F9FAFB; border:1px solid #E5E7EB;
+      border-radius:14px 14px 14px 4px;
+      padding:.7rem .95rem; margin:.35rem 0; color:#374151;
+  }
+  .narrative-box {
+      background:linear-gradient(135deg,#F0F9FF 0%,#E0F2FE 100%);
+      border-left:4px solid #29B5E8; border-radius:0 8px 8px 0;
+      padding:.8rem 1rem; margin:.6rem 0;
+      color:#0C4A6E; line-height:1.55;
+  }
+  .turn-divider { border:none; border-top:1px solid #F3F4F6; margin:.8rem 0; }
+</style>
+""", unsafe_allow_html=True)
+
+@st.cache_resource
+def get_session():
+    return get_active_session()
+
+session = get_session()
+
+
+def fiscal_years() -> list[str]:
+    y = date.today().year
+    return [str(y - 2), str(y - 1), str(y)]
+
+def fiscal_quarters() -> list[str]:
+    return ["Q1", "Q2", "Q3", "Q4"]
+
+def fiscal_months() -> list[str]:
+    return ["Jan","Feb","Mar","Apr","May","Jun",
+            "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+def default_year() -> str:
+    return str(date.today().year)
+
+def default_quarter() -> str:
+    shifted = (date.today().month - 10) % 12
+    return f"Q{shifted // 3 + 1}"
+
+def available_months_for_quarters(selected_quarters: list[str]) -> list[str]:
+    if not selected_quarters:
+        return fiscal_months()
+    months = []
+    for q in ["Q1", "Q2", "Q3", "Q4"]:
+        if q in selected_quarters:
+            months.extend(_QUARTER_MONTH_ABBRS[q])
+    return months
+
+def compute_periods(
+    sel_years: list[str],
+    sel_quarters: list[str],
+    sel_months: list[str],
+) -> list[str]:
+    if not sel_years:
+        return []
+    quarters = sel_quarters if sel_quarters else ["Q1", "Q2", "Q3", "Q4"]
+    month_nums = {_MONTH_TO_NUM[m] for m in sel_months} if sel_months else None
+    periods: set[str] = set()
+    for fy_str in sel_years:
+        fy = int(fy_str)
+        for q in quarters:
+            yr_offset, q_months = _QUARTER_CALENDAR[q]
+            cal_year = fy + yr_offset
+            for m in q_months:
+                if month_nums is None or m in month_nums:
+                    periods.add(f"{cal_year}-{m:02d}")
+    return sorted(periods)
+
+
+@st.cache_data(ttl=600)
+def get_filter_values(dimension: str) -> list[str]:
+    if dimension not in _DIM_TABLES:
+        return []
+    table, col = _DIM_TABLES[dimension]
+    try:
+        df = session.sql(f"""
+            SELECT DISTINCT {col} AS VAL
+            FROM {table}
+            WHERE {col} IS NOT NULL
+            ORDER BY 1
+        """).to_pandas()
+        return df["VAL"].tolist()
+    except Exception:
+        return []
+
+
+_DIM_HIERARCHY = {
+    "account": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT",
+        "code_col": "ACCOUNT_CODE",
+        "levels": ["ACCOUNT_LEVEL_1", "ACCOUNT_LEVEL_2", "ACCOUNT_LEVEL_3", "ACCOUNT_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+    "cost_center": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER",
+        "code_col": "COST_CENTER_CODE",
+        "levels": ["COST_CENTER_LEVEL_1", "COST_CENTER_LEVEL_2", "COST_CENTER_LEVEL_3", "COST_CENTER_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+    "entity": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY",
+        "code_col": "ENTITY_CODE",
+        "levels": ["ENTITY_LEVEL_1", "ENTITY_LEVEL_2", "ENTITY_LEVEL_3", "ENTITY_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+    "functional_area": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA",
+        "code_col": "FUNC_AREA_CODE",
+        "levels": ["FUNC_AREA_LEVEL_1", "FUNC_AREA_LEVEL_2", "FUNC_AREA_LEVEL_3"],
+        "level_labels": ["Level 1", "Level 2", "Level 3"],
+    },
+    "profit_center": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER",
+        "code_col": "PROFIT_CENTER_CODE",
+        "levels": ["PROFIT_CENTER_LEVEL_1", "PROFIT_CENTER_LEVEL_2", "PROFIT_CENTER_LEVEL_3", "PROFIT_CENTER_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+}
+
+
+@st.cache_data(ttl=600)
+def get_hierarchy_values(dimension: str, level_idx: int, parent_selections: dict) -> list[str]:
+    spec = _DIM_HIERARCHY.get(dimension)
+    if not spec or level_idx >= len(spec["levels"]):
+        return []
+    table = spec["table"]
+    col = spec["levels"][level_idx]
+    wheres = []
+    for i in range(level_idx):
+        parent_vals = parent_selections.get(i, [])
+        if parent_vals:
+            in_list = ", ".join(f"'{v}'" for v in parent_vals)
+            wheres.append(f'{spec["levels"][i]} IN ({in_list})')
+    where_clause = f"WHERE {col} IS NOT NULL AND {col} != ''"
+    if wheres:
+        where_clause += " AND " + " AND ".join(wheres)
+    try:
+        df = session.sql(f"SELECT DISTINCT {col} AS VAL FROM {table} {where_clause} ORDER BY 1").to_pandas()
+        return df["VAL"].tolist()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600)
+def get_codes_for_hierarchy(dimension: str, selections: dict) -> list[str]:
+    spec = _DIM_HIERARCHY.get(dimension)
+    if not spec:
+        return []
+    table = spec["table"]
+    code_col = spec["code_col"]
+    wheres = []
+    for i, level_col in enumerate(spec["levels"]):
+        vals = selections.get(i, [])
+        if vals:
+            in_list = ", ".join(f"'{v}'" for v in vals)
+            wheres.append(f"{level_col} IN ({in_list})")
+    if not wheres:
+        return []
+    where_clause = " AND ".join(wheres)
+    try:
+        df = session.sql(f"SELECT DISTINCT {code_col} AS VAL FROM {table} WHERE {where_clause} ORDER BY 1").to_pandas()
+        return df["VAL"].tolist()
+    except Exception:
+        return []
+
+
+def render_cascading_filter(dimension: str, label: str, defaults: dict, key_prefix: str) -> dict:
+    spec = _DIM_HIERARCHY[dimension]
+    selections = {}
+    for level_idx in range(len(spec["levels"])):
+        level_label = spec["level_labels"][level_idx]
+        opts = get_hierarchy_values(dimension, level_idx, selections)
+        if not opts:
+            break
+        default_vals = defaults.get(level_idx, [])
+        valid_defaults = [d for d in default_vals if d in opts]
+        selected = st.multiselect(
+            f"{label} {level_label}",
+            options=opts,
+            default=valid_defaults,
+            key=f"{key_prefix}_l{level_idx}",
+        )
+        if selected:
+            selections[level_idx] = selected
+        else:
+            break
+    return selections
+
+
+def build_filtered_question(question: str, filters: dict) -> str:
+    parts: list[str] = []
+
+    currency_map = {"EUR": "VAL_EUR", "USD": "VAL_USD_INI", "Local Currency (LC)": "VAL_LC"}
+    currency = filters.get("currency", "EUR")
+    val_col = currency_map.get(currency, "VAL_EUR")
+    parts.append(f"Use {val_col} as the value/amount column (currency: {currency})")
+
+    periods = filters.get("periods", [])
+    if periods:
+        preview = ", ".join(periods[:8])
+        more = f" (+{len(periods)-8} more)" if len(periods) > 8 else ""
+        parts.append(f"TIME column IN ({preview}{more}) -- YYYY-MM format")
+    versions = filters.get("versions", [])
+    if versions:
+        parts.append(f"VERSION column IN ({', '.join(versions)})")
+    hierarchy = filters.get("hierarchy", {})
+    dim_labels = {
+        "account": "GL Account",
+        "cost_center": "Cost Center",
+        "entity": "Entity",
+        "functional_area": "Functional Area",
+        "profit_center": "Profit Center",
+    }
+    for dim, selections in hierarchy.items():
+        if not selections:
+            continue
+        spec = _DIM_HIERARCHY[dim]
+        label = dim_labels.get(dim, dim)
+        deepest_level = max(selections.keys())
+        deepest_vals = selections[deepest_level]
+        level_name = spec["levels"][deepest_level]
+        parts.append(f"{label} hierarchy ({level_name}) IN ({', '.join(deepest_vals)})")
+    if not parts:
+        return question
+    ctx = (
+        "MANDATORY FILTERS - You MUST JOIN to dimension tables and apply these WHERE conditions:\n"
+        + "\n".join(f"  * {p}" for p in parts)
+        + "\n\nDo NOT return data outside these filters."
+    )
+    return f"{ctx}\n\nQuestion: {question}"
+
+
+def filter_summary(filters: dict) -> str:
+    parts: list[str] = []
+    currency = filters.get("currency", "EUR")
+    parts.append(currency)
+    periods = filters.get("periods", [])
+    if periods:
+        fy_set = sorted({p[:4] for p in periods})
+        parts.append(f"FY {' / '.join(fy_set)}")
+    versions = filters.get("versions", [])
+    if versions:
+        parts.append(", ".join(versions[:2]) + (f" +{len(versions)-2}" if len(versions) > 2 else ""))
+    dim_short = {"account": "Acct", "cost_center": "CC", "entity": "Entity",
+                 "functional_area": "FA", "profit_center": "PC"}
+    hierarchy = filters.get("hierarchy", {})
+    for dim, selections in hierarchy.items():
+        if not selections:
+            continue
+        deepest = max(selections.keys())
+        vals = selections[deepest]
+        short = ", ".join(vals[:2]) + (f" +{len(vals)-2}" if len(vals) > 2 else "")
+        spec = _DIM_HIERARCHY[dim]
+        level_label = spec["level_labels"][deepest]
+        parts.append(f"{dim_short.get(dim, dim)} {level_label}: {short}")
+    return " | ".join(parts) if parts else "No filters - showing all data"
+
+
+def call_analyst(filtered_question: str) -> dict:
+    body = {
+        "messages": [{
+            "role": "user",
+            "content": [{"type": "text", "text": filtered_question}],
+        }],
+        "semantic_view": SEMANTIC_VIEW,
+    }
+    if IN_SIS:
+        resp = _snowflake.send_snow_api_request(
+            "POST", ANALYST_URL_SUFFIX, {}, {}, body, {}, 45000
+        )
+        if resp.get("status") != 200:
+            raise RuntimeError(
+                f"Cortex Analyst {resp.get('status')}: {resp.get('content', '(no detail)')}"
+            )
+        return json.loads(resp["content"])
+    else:
+        conn = session.connection
+        token = conn.rest.token
+        host = conn.host
+        url = f"https://{host}{ANALYST_URL_SUFFIX}"
+        headers = {
+            "Authorization": f'Snowflake Token="{token}"',
+            "Content-Type": "application/json",
+        }
+        r = requests.post(url, json=body, headers=headers, timeout=60)
+        if r.status_code != 200:
+            raise RuntimeError(f"Cortex Analyst {r.status_code}: {r.text[:500]}")
+        return r.json()
+
+
+def parse_analyst_response(resp: dict) -> tuple[str | None, str]:
+    sql, texts = None, []
+    for block in resp.get("message", {}).get("content", []):
+        if block.get("type") == "sql":
+            sql = block.get("statement", "").strip()
+        elif block.get("type") == "text":
+            texts.append(block.get("text", ""))
+    return sql, " ".join(texts).strip()
+
+
+_FACT_COL_MAP = {
+    "account":         "ACCOUNT",
+    "cost_center":     "COST_CENTER",
+    "entity":          "ENTITY",
+    "functional_area": "FUNCTIONAL_AREA",
+    "profit_center":   "PROFIT_CENTER",
+}
+
+
+def build_filter_cte(filters: dict) -> str:
+    wheres: list[str] = []
+
+    hierarchy = filters.get("hierarchy", {})
+    for dim, selections in hierarchy.items():
+        if not selections:
+            continue
+        spec = _DIM_HIERARCHY.get(dim)
+        if not spec:
+            continue
+        fact_col = _FACT_COL_MAP[dim]
+        dim_wheres = []
+        for level_idx, vals in selections.items():
+            if vals:
+                in_list = ", ".join(f"'{v}'" for v in vals)
+                dim_wheres.append(f'{spec["levels"][level_idx]} IN ({in_list})')
+        if dim_wheres:
+            where_clause = " AND ".join(dim_wheres)
+            wheres.append(
+                f'{fact_col} IN (SELECT {spec["code_col"]} FROM {spec["table"]} WHERE {where_clause})'
+            )
+
+    periods = filters.get("periods", [])
+    if periods:
+        in_list = ", ".join(f"'{p}'" for p in periods)
+        wheres.append(f"TIME IN ({in_list})")
+
+    versions = filters.get("versions", [])
+    if versions:
+        in_list = ", ".join(f"'{v}'" for v in versions)
+        wheres.append(f"VERSION IN ({in_list})")
+
+    return "\n  AND ".join(wheres) if wheres else ""
+
+
+def inject_filter_clauses(sql: str, filters: dict) -> str:
+    if not sql:
+        return sql
+
+    where_block = build_filter_cte(filters)
+    if not where_block:
+        return sql
+
+    table_pattern = r"\b(?:EDW_DEV\.WH\.)?VW_JEDOX_DATA_OPEX\b"
+    if not re.search(table_pattern, sql, re.I):
+        return sql
+
+    replaced = re.sub(
+        r"(?i)(\bFROM\s+)" + r"(?:EDW_DEV\.WH\.)?VW_JEDOX_DATA_OPEX\b",
+        r"\1__filtered_fact",
+        sql,
+    )
+    replaced = re.sub(
+        r"(?i)(\bJOIN\s+)" + r"(?:EDW_DEV\.WH\.)?VW_JEDOX_DATA_OPEX\b",
+        r"\1__filtered_fact",
+        replaced,
+    )
+
+    if replaced == sql:
+        return sql
+
+    our_cte = (
+        f"__filtered_fact AS (\n"
+        f"  SELECT * FROM EDW_DEV.WH.VW_JEDOX_DATA_OPEX\n"
+        f"  WHERE {where_block}\n"
+        f")"
+    )
+
+    if re.match(r"\s*WITH\b", replaced, re.I):
+        replaced = re.sub(r"(?i)^\s*WITH\s+", "", replaced, count=1)
+        return f"WITH {our_cte},\n{replaced}"
+    else:
+        return f"WITH {our_cte}\n{replaced}"
+
+
+def run_query(sql: str) -> pd.DataFrame:
+    return session.sql(sql).to_pandas()
+
+
+_TIME_RE = re.compile(r"period|month|year|date|time|quarter|cal_year", re.I)
+_VAR_RE = re.compile(r"variance|delta|deviation|change|growth|pct|percent|ratio", re.I)
+
+def detect_chart(df: pd.DataFrame) -> str:
+    if df.empty or len(df.columns) < 2:
+        return "table"
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    str_cols = df.select_dtypes(exclude="number").columns.tolist()
+    if not num_cols:
+        return "table"
+    if len(df) == 1:
+        return "kpi"
+    time_cols = [c for c in str_cols if _TIME_RE.search(c)]
+    if time_cols and num_cols:
+        return "line"
+    if len(str_cols) == 1 and num_cols:
+        return "bar"
+    if len(str_cols) == 2 and len(num_cols) == 1:
+        return "grouped_bar"
+    return "table"
+
+
+def build_chart(df: pd.DataFrame, chart_type: str):
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    str_cols = df.select_dtypes(exclude="number").columns.tolist()
+    time_cols = [c for c in str_cols if _TIME_RE.search(c)]
+    try:
+        if chart_type == "line" and time_cols and num_cols:
+            chart_df = df.sort_values(time_cols[0]).set_index(time_cols[0])[num_cols]
+            st.line_chart(chart_df)
+            return True
+        elif chart_type == "bar" and str_cols and num_cols:
+            df_s = df.sort_values(num_cols[0], ascending=False).head(25)
+            chart_df = df_s.set_index(str_cols[0])[num_cols]
+            st.bar_chart(chart_df)
+            return True
+        elif chart_type == "grouped_bar" and len(str_cols) >= 2 and num_cols:
+            pivot_df = df.pivot_table(
+                index=str_cols[0], columns=str_cols[1],
+                values=num_cols[0], aggfunc="sum"
+            ).fillna(0)
+            st.bar_chart(pivot_df)
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def fmt_num(v: float) -> str:
+    if abs(v) >= 1_000_000_000: return f"{v/1_000_000_000:.2f}B"
+    if abs(v) >= 1_000_000:     return f"{v/1_000_000:.2f}M"
+    if abs(v) >= 1_000:         return f"{v/1_000:.1f}K"
+    return f"{v:,.2f}"
+
+def show_kpi_cards(df: pd.DataFrame):
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    cards = "".join(
+        f'<div class="kpi-card">'
+        f'<div class="kpi-label">{c.replace("_"," ").title()}</div>'
+        f'<div class="kpi-value">{fmt_num(df[c].iloc[0])}</div>'
+        f'</div>'
+        for c in num_cols[:6]
+    )
+    st.markdown(f'<div class="kpi-row">{cards}</div>', unsafe_allow_html=True)
+
+
+def generate_narrative(question: str, df: pd.DataFrame) -> str:
+    if df.empty:
+        return ""
+    top = df.head(8).to_string(index=False, max_colwidth=30)
+    prompt = (
+        f'You are a senior financial analyst writing an executive insight.\n\n'
+        f'Question: "{question}"\n'
+        f'Result rows: {len(df)} | Columns: {", ".join(df.columns)}\n'
+        f'Sample data:\n{top}\n\n'
+        f'Write exactly 2-3 sentences. Be specific with numbers. '
+        f'Highlight the single most important finding. '
+        f'No preamble. Business language.'
+    )
+    try:
+        escaped = prompt.replace("'", "\\'").replace("$$", "$ $")
+        sql = f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{LLM_MODEL}', $${prompt}$$) AS RESP"
+        result = session.sql(sql).to_pandas()
+        return result["RESP"].iloc[0] if not result.empty else ""
+    except Exception as e:
+        return f"(Narrative error: {e})"
+
+
+for k, v in [("history",[]), ("pending",""),
+              ("show_sql",False), ("show_narr",True), ("show_chart",True),
+              ("auto_run",False)]:
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+with st.sidebar:
+    st.markdown("## OPEX Agent")
+    st.caption("Cost Analytics & Insights")
+    st.divider()
+
+    st.markdown("#### Currency")
+    sel_currency = st.radio(
+        "Value column",
+        options=["EUR", "USD", "Local Currency (LC)"],
+        index=0,
+        horizontal=True,
+        help="EUR = VAL_EUR, USD = VAL_USD_INI, LC = VAL_LC (with CURRENCY column for reference)",
+    )
+
+    st.divider()
+
+    st.markdown("#### Time Period")
+    sel_years = st.multiselect(
+        "Fiscal Year",
+        options=fiscal_years(),
+        default=[default_year()],
+        help="FY starts October. FY2024 = Oct 2023 - Sep 2024.",
+    )
+    sel_quarters = st.multiselect(
+        "Quarter",
+        options=fiscal_quarters(),
+        default=[],
+        help="Q1=Oct-Dec, Q2=Jan-Mar, Q3=Apr-Jun, Q4=Jul-Sep",
+    )
+    avail_months = available_months_for_quarters(sel_quarters)
+    sel_months = st.multiselect(
+        "Month (optional)",
+        options=avail_months,
+        default=[],
+        help="Leave empty to include all months in the selected quarters.",
+    )
+    active_periods = compute_periods(sel_years, sel_quarters, sel_months)
+    if active_periods:
+        st.caption(f"-> {len(active_periods)} period(s): {active_periods[0]} ... {active_periods[-1]}")
+    else:
+        st.caption("Select at least one year and quarter.")
+
+    st.divider()
+
+    st.markdown("#### Version / Scenario")
+    sel_versions = st.multiselect(
+        "Version",
+        options=["Actual", "Budget X", "FY26 FCST P01", "FY26 FCST P02", "FY26 FCST P02 Prelim", "FY26 FCST P03", "FY26 FCST P03 Final", "FY26 FCST P04", "FY26 FCST P05", "FY26 FCST P05 Prelim", "FY26 FCST P06", "FY26 FCST P06 Final", "FY26 FCST P07", "FY26 FCST P08 Prelim"],
+        default=["Actual"],
+        help="Leave empty to include all versions.",
+    )
+
+    st.divider()
+    st.markdown("#### Dimensions")
+    st.caption("Cascading filters: each level narrows the next")
+
+    with st.expander("GL Account", expanded=True):
+        acct_selections = render_cascading_filter(
+            "account", "Account", {0: ["OPEX"]}, "acct"
+        )
+
+    with st.expander("Cost Center", expanded=True):
+        cc_selections = render_cascading_filter(
+            "cost_center", "Cost Center", {0: ["All Cost Centers"]}, "cc"
+        )
+
+    with st.expander("Entity", expanded=False):
+        ent_selections = render_cascading_filter(
+            "entity", "Entity", {0: ["Worldwide"]}, "ent"
+        )
+
+    with st.expander("Functional Area", expanded=False):
+        fa_selections = render_cascading_filter(
+            "functional_area", "Func Area", {0: ["Internal Reporting"]}, "fa"
+        )
+
+    with st.expander("Profit Center", expanded=False):
+        pc_selections = render_cascading_filter(
+            "profit_center", "Profit Center", {0: ["All Profit Center"]}, "pc"
+        )
+
+    st.divider()
+    st.markdown("#### Quick Questions")
+    for i, q in enumerate(SUGGESTED_QUESTIONS):
+        label = q[:50] + ("..." if len(q) > 50 else "")
+        if st.button(label, key=f"sq{i}", use_container_width=True):
+            st.session_state["pending"] = q
+            st.session_state["auto_run"] = True
+
+    st.divider()
+    st.markdown("#### Display")
+    st.session_state["show_sql"]   = st.toggle("Show generated SQL",   st.session_state["show_sql"])
+    st.session_state["show_narr"]  = st.toggle("AI narrative",         st.session_state["show_narr"])
+    st.session_state["show_chart"] = st.toggle("Auto-generate charts", st.session_state["show_chart"])
+
+    st.divider()
+    if st.session_state["history"]:
+        if st.button("Clear conversation", use_container_width=True):
+            st.session_state["history"] = []
+            st.rerun()
+    st.caption("Snowflake Cortex Analyst")
+
+
+active_filters = {
+    "periods":   active_periods,
+    "versions":  sel_versions,
+    "currency":  sel_currency,
+    "hierarchy": {
+        "account":         acct_selections,
+        "cost_center":     cc_selections,
+        "entity":          ent_selections,
+        "functional_area": fa_selections,
+        "profit_center":   pc_selections,
+    },
+}
+
+st.markdown("""
+<div class="header-banner">
+  <h1>OPEX Cost Analytics Agent</h1>
+  <p>Ask any question about operational expenditure - actuals, budget, forecast, variance</p>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown(
+    f'<div class="filter-badge">{filter_summary(active_filters)}</div>',
+    unsafe_allow_html=True,
+)
+
+for turn in st.session_state["history"]:
+    st.markdown(f'<div class="bubble-user">{turn["question"]}</div>', unsafe_allow_html=True)
+
+    if turn.get("error"):
+        st.error(turn["error"])
+    else:
+        if turn.get("agent_text"):
+            st.markdown(f'<div class="bubble-agent">{turn["agent_text"]}</div>', unsafe_allow_html=True)
+
+        if st.session_state["show_sql"] and turn.get("sql"):
+            with st.expander("Generated SQL", expanded=False):
+                st.code(turn["sql"], language="sql")
+
+        df = turn.get("df")
+        if df is not None and not df.empty:
+            ctype = turn.get("chart_type", "table")
+
+            if st.session_state["show_chart"]:
+                if ctype == "kpi":
+                    show_kpi_cards(df)
+                elif ctype != "table":
+                    build_chart(df, ctype)
+
+            with st.expander(f"Data - {len(df):,} rows", expanded=(ctype == "table")):
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Download CSV",
+                    df.to_csv(index=False).encode("utf-8"),
+                    "opex_export.csv", "text/csv",
+                    key=f"dl_{id(turn)}",
+                )
+
+            if st.session_state["show_narr"] and turn.get("narrative"):
+                st.markdown(
+                    f'<div class="narrative-box">{turn["narrative"]}</div>',
+                    unsafe_allow_html=True,
+                )
+
+        elif df is not None and df.empty:
+            st.info("The query returned no rows for the active filters.")
+
+    st.markdown('<hr class="turn-divider">', unsafe_allow_html=True)
+
+col_q, col_btn = st.columns([6, 1])
+with col_q:
+    user_q = st.text_input(
+        "question",
+        value=st.session_state.get("pending", ""),
+        placeholder="e.g. Which cost centers are over budget by more than 15%?",
+        label_visibility="collapsed",
+        key="input_box",
+    )
+with col_btn:
+    go = st.button("Analyze", type="primary", use_container_width=True)
+
+if st.session_state.get("pending"):
+    st.session_state["pending"] = ""
+
+if go and user_q.strip():
+    question = user_q.strip()
+    turn: dict = {"question": question}
+
+    with st.spinner("Analyzing with active filters..."):
+        filtered_q = build_filtered_question(question, active_filters)
+        try:
+            resp = call_analyst(filtered_q)
+            sql, agent_text = parse_analyst_response(resp)
+            turn["agent_text"] = agent_text
+
+            if sql:
+                sql = inject_filter_clauses(sql, active_filters)
+                turn["sql"] = sql
+                df = run_query(sql)
+                turn["df"] = df
+                turn["chart_type"] = detect_chart(df)
+                if st.session_state["show_narr"] and not df.empty:
+                    turn["narrative"] = generate_narrative(question, df)
+            else:
+                turn["sql"] = None
+                turn["df"] = pd.DataFrame()
+                turn["chart_type"] = "table"
+
+        except Exception as exc:
+            turn["error"] = f"Unexpected error: {exc}"
+
+    st.session_state["history"].append(turn)
+    st.rerun()
