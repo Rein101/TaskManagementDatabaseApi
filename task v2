@@ -1,0 +1,1080 @@
+# Main task that works
+import streamlit as st
+import pandas as pd
+import json
+import re
+import requests
+from datetime import date
+
+from snowflake.snowpark.context import get_active_session
+
+try:
+    import _snowflake
+    IN_SIS = True
+except ImportError:
+    IN_SIS = False
+
+SEMANTIC_VIEW = "EDW_DEV.WH.TEST"
+LLM_MODEL = "llama3.1-8b"
+ANALYST_URL_SUFFIX = "/api/v2/cortex/analyst/message"
+
+_DIM_TABLES: dict[str, tuple[str, str]] = {
+    "entity":          ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY",        "ENTITY_CODE"),
+    "cost_center":     ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER",   "COST_CENTER_CODE"),
+    "functional_area": ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA",     "FUNCTIONAL_AREA_CODE"),
+    "account":         ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT",       "ACCOUNT_CODE"),
+    "profit_center":   ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER", "PROFIT_CENTER_CODE"),
+}
+
+_QUARTER_CALENDAR: dict[str, tuple[int, list[int]]] = {
+    "Q1": (-1, [10, 11, 12]),
+    "Q2": ( 0, [ 1,  2,  3]),
+    "Q3": ( 0, [ 4,  5,  6]),
+    "Q4": ( 0, [ 7,  8,  9]),
+}
+_QUARTER_MONTH_ABBRS: dict[str, list[str]] = {
+    "Q1": ["Oct", "Nov", "Dec"],
+    "Q2": ["Jan", "Feb", "Mar"],
+    "Q3": ["Apr", "May", "Jun"],
+    "Q4": ["Jul", "Aug", "Sep"],
+}
+_MONTH_TO_NUM = {m: i+1 for i, m in enumerate(
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+)}
+
+SUGGESTED_QUESTIONS = [
+    "What are the top 10 cost centers by total OPEX?",
+    "Show monthly actual vs budget trend",
+    "Which functional areas have the highest variance vs budget?",
+    "Compare actual OPEX by entity",
+    "Top 5 cost centers by Travel and Entertainment spend",
+    "Top 10 travellers by cost center for T&E",
+    "Month-over-month T&E trend by entity",
+    "Show variance actual vs budget by functional area sorted by largest overspend",
+    "Cost centers where actual exceeds forecast by more than 10%",
+    "Budget utilization rate by cost center",
+    "Year-over-year OPEX comparison by entity",
+    "Top GL accounts by spend in the selected period",
+    "Show prior year vs current year actuals",
+]
+
+
+st.set_page_config(page_title="OPEX Cost Analytics Agent", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown("""
+<style>
+  .header-banner {
+      background: linear-gradient(135deg, #29B5E8 0%, #0073B6 100%);
+      padding: 1.2rem 1.6rem; border-radius: 12px;
+      margin-bottom: 1rem; color: white;
+  }
+  .header-banner h1 { margin:0; font-size:1.55rem; font-weight:700; }
+  .header-banner p  { margin:0.2rem 0 0; opacity:.88; font-size:.88rem; }
+  .filter-badge {
+      background:#F0F9FF; border:1px solid #BAE6FD;
+      border-radius:8px; padding:.45rem .8rem;
+      color:#0369A1; font-size:.8rem; margin-bottom:.8rem;
+  }
+  .kpi-row { display:flex; gap:10px; flex-wrap:wrap; margin:.5rem 0; }
+  .kpi-card {
+      flex:1; min-width:150px; background:white;
+      border:1px solid #E5E7EB; border-radius:10px;
+      padding:.85rem 1rem; box-shadow:0 1px 5px rgba(0,0,0,.06);
+  }
+  .kpi-label { color:#6B7280; font-size:.72rem; font-weight:600;
+               text-transform:uppercase; letter-spacing:.5px; }
+  .kpi-value { color:#111827; font-size:1.5rem; font-weight:700; margin-top:.12rem; }
+  .bubble-user {
+      background:#EFF6FF; border:1px solid #BFDBFE;
+      border-radius:14px 14px 4px 14px;
+      padding:.7rem .95rem; margin:.35rem 0;
+      color:#1E40AF; font-weight:500;
+  }
+  .bubble-agent {
+      background:#F9FAFB; border:1px solid #E5E7EB;
+      border-radius:14px 14px 14px 4px;
+      padding:.7rem .95rem; margin:.35rem 0; color:#374151;
+  }
+  .narrative-box {
+      background:linear-gradient(135deg,#F0F9FF 0%,#E0F2FE 100%);
+      border-left:4px solid #29B5E8; border-radius:0 8px 8px 0;
+      padding:.8rem 1rem; margin:.6rem 0;
+      color:#0C4A6E; line-height:1.55;
+  }
+  .turn-divider { border:none; border-top:1px solid #F3F4F6; margin:.8rem 0; }
+  .auto-tag {
+      display:inline-block; font-size:.7rem; font-weight:600;
+      padding:.12rem .5rem; border-radius:10px; margin:.1rem;
+      vertical-align:middle;
+  }
+  .tag-ver  { background:#FFF7ED; color:#9A3412; border:1px solid #FED7AA; }
+  .tag-hier { background:#F5F3FF; color:#5B21B6; border:1px solid #DDD6FE; }
+  .tag-per  { background:#F0FDF4; color:#166534; border:1px solid #BBF7D0; }
+</style>
+""", unsafe_allow_html=True)
+
+@st.cache_resource
+def get_session():
+    return get_active_session()
+
+session = get_session()
+
+
+# ── FISCAL HELPERS (unchanged) ────────────────────────────────────────────────
+def fiscal_years() -> list[str]:
+    y = date.today().year
+    return [str(y - 2), str(y - 1), str(y)]
+
+def fiscal_quarters() -> list[str]:
+    return ["Q1", "Q2", "Q3", "Q4"]
+
+def fiscal_months() -> list[str]:
+    return ["Jan","Feb","Mar","Apr","May","Jun",
+            "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+def default_year() -> str:
+    return str(date.today().year)
+
+def default_quarter() -> str:
+    shifted = (date.today().month - 10) % 12
+    return f"Q{shifted // 3 + 1}"
+
+def available_months_for_quarters(selected_quarters: list[str]) -> list[str]:
+    if not selected_quarters:
+        return fiscal_months()
+    months = []
+    for q in ["Q1", "Q2", "Q3", "Q4"]:
+        if q in selected_quarters:
+            months.extend(_QUARTER_MONTH_ABBRS[q])
+    return months
+
+def compute_periods(
+    sel_years: list[str],
+    sel_quarters: list[str],
+    sel_months: list[str],
+) -> list[str]:
+    if not sel_years:
+        return []
+    quarters = sel_quarters if sel_quarters else ["Q1", "Q2", "Q3", "Q4"]
+    month_nums = {_MONTH_TO_NUM[m] for m in sel_months} if sel_months else None
+    periods: set[str] = set()
+    for fy_str in sel_years:
+        fy = int(fy_str)
+        for q in quarters:
+            yr_offset, q_months = _QUARTER_CALENDAR[q]
+            cal_year = fy + yr_offset
+            for m in q_months:
+                if month_nums is None or m in month_nums:
+                    periods.add(f"{cal_year}-{m:02d}")
+    return sorted(periods)
+
+
+# ── DIM / HIERARCHY HELPERS (unchanged from Main) ────────────────────────────
+@st.cache_data(ttl=600)
+def get_filter_values(dimension: str) -> list[str]:
+    if dimension not in _DIM_TABLES:
+        return []
+    table, col = _DIM_TABLES[dimension]
+    try:
+        df = session.sql(f"""
+            SELECT DISTINCT {col} AS VAL
+            FROM {table}
+            WHERE {col} IS NOT NULL
+            ORDER BY 1
+        """).to_pandas()
+        return df["VAL"].tolist()
+    except Exception:
+        return []
+
+
+_DIM_HIERARCHY = {
+    "account": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT",
+        "code_col": "ACCOUNT_CODE",
+        "levels": ["ACCOUNT_LEVEL_1", "ACCOUNT_LEVEL_2", "ACCOUNT_LEVEL_3", "ACCOUNT_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+    "cost_center": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER",
+        "code_col": "COST_CENTER_CODE",
+        "levels": ["COST_CENTER_LEVEL_1", "COST_CENTER_LEVEL_2", "COST_CENTER_LEVEL_3", "COST_CENTER_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+    "entity": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY",
+        "code_col": "ENTITY_CODE",
+        "levels": ["ENTITY_LEVEL_1", "ENTITY_LEVEL_2", "ENTITY_LEVEL_3", "ENTITY_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+    "functional_area": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA",
+        "code_col": "FUNC_AREA_CODE",
+        "levels": ["FUNC_AREA_LEVEL_1", "FUNC_AREA_LEVEL_2", "FUNC_AREA_LEVEL_3"],
+        "level_labels": ["Level 1", "Level 2", "Level 3"],
+    },
+    "profit_center": {
+        "table": "ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER",
+        "code_col": "PROFIT_CENTER_CODE",
+        "levels": ["PROFIT_CENTER_LEVEL_1", "PROFIT_CENTER_LEVEL_2", "PROFIT_CENTER_LEVEL_3", "PROFIT_CENTER_LEVEL_4"],
+        "level_labels": ["Level 1", "Level 2", "Level 3", "Level 4"],
+    },
+}
+
+
+@st.cache_data(ttl=600)
+def get_hierarchy_values(dimension: str, level_idx: int, parent_selections: dict) -> list[str]:
+    spec = _DIM_HIERARCHY.get(dimension)
+    if not spec or level_idx >= len(spec["levels"]):
+        return []
+    table = spec["table"]
+    col = spec["levels"][level_idx]
+    wheres = []
+    for i in range(level_idx):
+        parent_vals = parent_selections.get(i, [])
+        if parent_vals:
+            in_list = ", ".join(f"'{v}'" for v in parent_vals)
+            wheres.append(f'{spec["levels"][i]} IN ({in_list})')
+    where_clause = f"WHERE {col} IS NOT NULL AND {col} != ''"
+    if wheres:
+        where_clause += " AND " + " AND ".join(wheres)
+    try:
+        df = session.sql(f"SELECT DISTINCT {col} AS VAL FROM {table} {where_clause} ORDER BY 1").to_pandas()
+        return df["VAL"].tolist()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600)
+def get_codes_for_hierarchy(dimension: str, selections: dict) -> list[str]:
+    spec = _DIM_HIERARCHY.get(dimension)
+    if not spec:
+        return []
+    table = spec["table"]
+    code_col = spec["code_col"]
+    wheres = []
+    for i, level_col in enumerate(spec["levels"]):
+        vals = selections.get(i, [])
+        if vals:
+            in_list = ", ".join(f"'{v}'" for v in vals)
+            wheres.append(f"{level_col} IN ({in_list})")
+    if not wheres:
+        return []
+    where_clause = " AND ".join(wheres)
+    try:
+        df = session.sql(f"SELECT DISTINCT {code_col} AS VAL FROM {table} WHERE {where_clause} ORDER BY 1").to_pandas()
+        return df["VAL"].tolist()
+    except Exception:
+        return []
+
+
+# ── ACCOUNT HIERARCHY KEYWORD DETECTION (from task_v2) ───────────────────────
+_ACCOUNT_HIERARCHY_LEVELS = ["ACCOUNT_LEVEL_1","ACCOUNT_LEVEL_2","ACCOUNT_LEVEL_3","ACCOUNT_LEVEL_4"]
+
+@st.cache_data(ttl=600)
+def load_account_hierarchy() -> pd.DataFrame:
+    """Load the full account hierarchy once and cache it."""
+    try:
+        return session.sql(
+            "SELECT DISTINCT ACCOUNT_LEVEL_1, ACCOUNT_LEVEL_2, ACCOUNT_LEVEL_3, "
+            "ACCOUNT_LEVEL_4, ACCOUNT_CODE "
+            "FROM ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT ORDER BY 1"
+        ).to_pandas()
+    except Exception:
+        return pd.DataFrame()
+
+
+def resolve_account_keyword(keyword: str) -> dict:
+    """Search account hierarchy deepest-first for a keyword match."""
+    df = load_account_hierarchy()
+    if df.empty:
+        return {}
+    kw_lower = keyword.lower().strip()
+    for level_idx in range(3, -1, -1):   # L4 → L3 → L2 → L1
+        col = _ACCOUNT_HIERARCHY_LEVELS[level_idx]
+        if col not in df.columns:
+            continue
+        for val in df[col].dropna().unique():
+            if val and kw_lower in str(val).lower():
+                return {"level_idx": level_idx, "level_col": col, "matched_value": str(val)}
+    return {}
+
+
+_KEYWORD_HINTS = [
+    "travel", "t&e", "software", "consulting", "salary", "bonus",
+    "depreciation", "amortization", "facilities", "equipment", "rent",
+    "training", "recruitment", "insurance", "utilities", "communications",
+    "employee", "variable", "fixed", "opex", "compensation", "stock",
+    "contractor", "marketing", "legal", "healthcare", "patent",
+    "conference", "promotion", "logistics", "maintenance", "bad debt",
+    "commissions", "fees", "allocation", "services", "subscriptions",
+]
+
+
+def detect_account_keywords(text: str) -> list[dict]:
+    """Return list of hierarchy matches for known keywords found in the question."""
+    matches = []
+    text_lower = text.lower()
+    for kw in _KEYWORD_HINTS:
+        if kw in text_lower:
+            result = resolve_account_keyword(kw)
+            if result and not any(m["matched_value"] == result["matched_value"] for m in matches):
+                matches.append(result)
+    return matches
+
+
+# ── VERSION AUTO-DETECTION ────────────────────────────────────────────────────
+# FY starts October: P01=Oct, P02=Nov, P03=Dec, P04=Jan … P12=Sep
+_MONTH_TO_PERIOD_NUM: dict[str, int] = {
+    "oct":1,"nov":2,"dec":3,"jan":4,"feb":5,"mar":6,
+    "apr":7,"may":8,"jun":9,"jul":10,"aug":11,"sep":12,
+    "october":1,"november":2,"december":3,"january":4,"february":5,"march":6,
+    "april":7,"june":9,"july":10,"august":11,"september":12,
+}
+_VER_ACTUAL   = {"actual","actuals","spent","realized","incurred","real"}
+_VER_BUDGET   = {"budget","budgeted","overbudget","underbudget","budgetary","plan","planned"}
+_VER_FORECAST = {"forecast","forecasted","fcst","projected","projection"}
+
+_ALL_FORECAST_VERSIONS = [
+    "FY26 FCST P01","FY26 FCST P02","FY26 FCST P02 Prelim",
+    "FY26 FCST P03","FY26 FCST P03 Final","FY26 FCST P04",
+    "FY26 FCST P05","FY26 FCST P05 Prelim","FY26 FCST P06",
+    "FY26 FCST P06 Final","FY26 FCST P07","FY26 FCST P08 Prelim",
+]
+
+
+def detect_versions_from_question(question: str, sel_years: list[str]) -> list[str]:
+    """
+    Keyword → version list.  Returns [] if nothing detected
+    (caller then applies default 'Actual' via enforce_filters).
+    """
+    q     = question.lower()
+    words = set(re.findall(r"[a-z]+", q))
+    versions: list[str] = []
+
+    if words & _VER_ACTUAL:
+        versions.append("Actual")
+    if words & _VER_BUDGET:
+        versions.append("Budget X")
+    if words & _VER_FORECAST:
+        fy_match = re.search(r"\bfy\s*(\d{2,4})\b", q)
+        fy_str   = fy_match.group(1)[-2:] if fy_match \
+                   else (sel_years[-1] if sel_years else default_year())[-2:]
+        period_num = None
+        p_match = re.search(r"\bp\s*0?(\d{1,2})\b", q)
+        if p_match:
+            period_num = int(p_match.group(1))
+        else:
+            nm = re.search(r"period\s+(\d{1,2})", q)
+            if nm:
+                period_num = int(nm.group(1))
+        if period_num is None:
+            for mname, pnum in _MONTH_TO_PERIOD_NUM.items():
+                if re.search(r"\b" + mname + r"\b", q):
+                    period_num = pnum
+                    break
+        if period_num is not None:
+            versions.append(f"FY{fy_str} FCST P{period_num:02d}")
+        else:
+            versions.extend(v for v in _ALL_FORECAST_VERSIONS if v.startswith(f"FY{fy_str}"))
+
+    return versions   # empty = no override; enforce_filters defaults to Actual
+
+
+# ── QUESTION BUILDER (improved: hierarchy + version context) ──────────────────
+def build_filtered_question(question: str, filters: dict) -> str:
+    """
+    Prepend mandatory context to the question for Cortex Analyst.
+    Includes: currency, hierarchy keyword context, L1 dimension filters,
+    period, and version (or default-to-Actual instruction).
+    """
+    parts: list[str] = []
+
+    currency_map = {"EUR":"VAL_EUR","USD":"VAL_USD_INI","LC":"VAL_LC","Local Currency (LC)":"VAL_LC","DC":"VAL_EUR_NORM"}
+    currency = filters.get("currency","EUR")
+    val_col  = currency_map.get(currency,"VAL_EUR")
+    parts.append(f"Use {val_col} as the value/amount column for all aggregations (currency: {currency}).")
+
+    # Hierarchy keyword detection — inject explicit JOIN + filter + SELECT instructions
+    hier_matches = detect_account_keywords(question)
+    for m in hier_matches:
+        level_name = m["level_col"].replace("_"," ").title()
+        parts.append(
+            f"IMPORTANT: The user is asking about '{m['matched_value']}' which is found at "
+            f"{level_name} in the account hierarchy. "
+            f"JOIN the fact table ACCOUNT column to "
+            f"ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT.ACCOUNT_CODE "
+            f"and filter WHERE {m['level_col']} = '{m['matched_value']}'. "
+            f"Include ACCOUNT_LEVEL_1, ACCOUNT_LEVEL_2, ACCOUNT_LEVEL_3, ACCOUNT_LEVEL_4 in SELECT."
+        )
+
+    # L1 filters (from sidebar)
+    acct_l1 = filters.get("account_l1",["OPEX"])
+    if acct_l1:
+        in_list = ", ".join(f"'{v}'" for v in acct_l1)
+        parts.append(
+            f"MANDATORY: Only ACCOUNT_LEVEL_1 IN ({in_list}). "
+            f"JOIN fact.ACCOUNT = ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT.ACCOUNT_CODE "
+            f"WHERE ACCOUNT_LEVEL_1 IN ({in_list})."
+        )
+
+    entity_l1 = filters.get("entity_l1",[])
+    if entity_l1:
+        in_list = ", ".join(f"'{v}'" for v in entity_l1)
+        parts.append(
+            f"Entity filter: JOIN fact.ENTITY = ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY.ENTITY_CODE "
+            f"WHERE ENTITY_LEVEL_1 IN ({in_list})."
+        )
+
+    cc_l1 = filters.get("cost_center_l1",[])
+    if cc_l1:
+        in_list = ", ".join(f"'{v}'" for v in cc_l1)
+        parts.append(
+            f"Cost Center filter: JOIN fact.COST_CENTER = ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER.COST_CENTER_CODE "
+            f"WHERE COST_CENTER_LEVEL_1 IN ({in_list})."
+        )
+
+    fa_l1 = filters.get("func_area_l1",[])
+    if fa_l1:
+        in_list = ", ".join(f"'{v}'" for v in fa_l1)
+        parts.append(
+            f"Functional Area filter: JOIN fact.FUNCTIONAL_AREA = ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA.FUNC_AREA_CODE "
+            f"WHERE FUNC_AREA_LEVEL_1 IN ({in_list})."
+        )
+
+    pc_l1 = filters.get("profit_center_l1",[])
+    if pc_l1:
+        in_list = ", ".join(f"'{v}'" for v in pc_l1)
+        parts.append(
+            f"Profit Center filter: JOIN fact.PROFIT_CENTER = ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER.PROFIT_CENTER_CODE "
+            f"WHERE PROFIT_CENTER_LEVEL_1 IN ({in_list})."
+        )
+
+    periods = filters.get("periods",[])
+    if periods:
+        preview = ", ".join(periods[:8])
+        more    = f" (+{len(periods)-8} more)" if len(periods) > 8 else ""
+        parts.append(f"TIME column filter (YYYY-MM format): TIME IN ({preview}{more})")
+
+    versions = filters.get("versions",[])
+    if versions:
+        in_list = ", ".join(f"'{v}'" for v in versions)
+        parts.append(f"VERSION filter: VERSION IN ({in_list})")
+    else:
+        parts.append("VERSION filter: Default to VERSION = 'Actual' unless user explicitly mentions budget or forecast.")
+
+    if not parts:
+        return question
+
+    ctx = "MANDATORY CONTEXT - Apply ALL these conditions to the SQL query:\n" + \
+          "\n".join(f"  * {p}" for p in parts)
+    return f"{ctx}\n\nQuestion: {question}"
+
+
+def filter_summary(filters: dict) -> str:
+    parts: list[str] = []
+    periods = filters.get("periods",[])
+    if periods:
+        fy_set = sorted({p[:4] for p in periods})
+        parts.append(f"FY {' / '.join(fy_set)}")
+    parts.append(filters.get("currency","EUR"))
+    versions = filters.get("versions",[])
+    if versions:
+        parts.append(f"Ver: {', '.join(versions[:2])}" + (f" +{len(versions)-2}" if len(versions)>2 else ""))
+    acct = filters.get("account_l1",[])
+    if acct:
+        parts.append(f"Acct: {', '.join(acct[:2])}")
+    entity = filters.get("entity_l1",[])
+    if entity:
+        parts.append(f"Entity: {', '.join(entity[:2])}")
+    return " · ".join(parts) if parts else "Ask a question — filters auto-applied"
+
+
+# ── CORTEX ANALYST CALL (unchanged from Main — IN_SIS pattern) ───────────────
+def call_analyst(filtered_question: str) -> dict:
+    body = {
+        "messages": [{"role":"user","content":[{"type":"text","text":filtered_question}]}],
+        "semantic_view": SEMANTIC_VIEW,
+    }
+    if IN_SIS:
+        resp = _snowflake.send_snow_api_request(
+            "POST", ANALYST_URL_SUFFIX, {}, {}, body, {}, 45000
+        )
+        if resp.get("status") != 200:
+            raise RuntimeError(
+                f"Cortex Analyst {resp.get('status')}: {resp.get('content','(no detail)')}"
+            )
+        return json.loads(resp["content"])
+    else:
+        conn  = session.connection
+        token = conn.rest.token
+        host  = conn.host
+        url   = f"https://{host}{ANALYST_URL_SUFFIX}"
+        headers = {"Authorization": f'Snowflake Token="{token}"', "Content-Type":"application/json"}
+        r = requests.post(url, json=body, headers=headers, timeout=60)
+        if r.status_code != 200:
+            raise RuntimeError(f"Cortex Analyst {r.status_code}: {r.text[:500]}")
+        return r.json()
+
+
+def parse_analyst_response(resp: dict) -> tuple[str | None, str]:
+    sql, texts = None, []
+    for block in resp.get("message",{}).get("content",[]):
+        if block.get("type") == "sql":
+            sql = block.get("statement","").strip()
+        elif block.get("type") == "text":
+            texts.append(block.get("text",""))
+    return sql, " ".join(texts).strip()
+
+
+# ── ENFORCE FILTERS (from task_v2 — builds CTE with proper dim JOINs) ────────
+def enforce_filters(sql: str, filters: dict) -> str:
+    """
+    Replace fact table reference with a pre-filtered CTE that enforces
+    L1 dimension filters and version. Compatible with Cortex-generated SQL.
+    """
+    if not sql:
+        return sql
+
+    acct_l1   = filters.get("account_l1",   ["OPEX"])
+    entity_l1 = filters.get("entity_l1",    [])
+    cc_l1     = filters.get("cost_center_l1",[])
+    fa_l1     = filters.get("func_area_l1",  [])
+    pc_l1     = filters.get("profit_center_l1",[])
+    versions  = filters.get("versions",     [])
+    periods   = filters.get("periods",      [])
+
+    joins:  list[str] = []
+    wheres: list[str] = []
+
+    # Version — default Actual if nothing specified
+    if versions:
+        in_list = ", ".join(f"'{v}'" for v in versions)
+        wheres.append(f"f.VERSION IN ({in_list})")
+    else:
+        wheres.append("f.VERSION = 'Actual'")
+
+    # Period
+    if periods:
+        in_list = ", ".join(f"'{p}'" for p in periods)
+        wheres.append(f"f.TIME IN ({in_list})")
+
+    if acct_l1:
+        joins.append("JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT __acct ON f.ACCOUNT = __acct.ACCOUNT_CODE")
+        in_list = ", ".join(f"'{v}'" for v in acct_l1)
+        wheres.append(f"__acct.ACCOUNT_LEVEL_1 IN ({in_list})")
+
+    if entity_l1:
+        joins.append("JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY __ent ON f.ENTITY = __ent.ENTITY_CODE")
+        in_list = ", ".join(f"'{v}'" for v in entity_l1)
+        wheres.append(f"__ent.ENTITY_LEVEL_1 IN ({in_list})")
+
+    if cc_l1:
+        joins.append("JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER __cc ON f.COST_CENTER = __cc.COST_CENTER_CODE")
+        in_list = ", ".join(f"'{v}'" for v in cc_l1)
+        wheres.append(f"__cc.COST_CENTER_LEVEL_1 IN ({in_list})")
+
+    if fa_l1:
+        joins.append("JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_FUNC_AREA __fa ON f.FUNCTIONAL_AREA = __fa.FUNC_AREA_CODE")
+        in_list = ", ".join(f"'{v}'" for v in fa_l1)
+        wheres.append(f"__fa.FUNC_AREA_LEVEL_1 IN ({in_list})")
+
+    if pc_l1:
+        joins.append("JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER __pc ON f.PROFIT_CENTER = __pc.PROFIT_CENTER_CODE")
+        in_list = ", ".join(f"'{v}'" for v in pc_l1)
+        wheres.append(f"__pc.PROFIT_CENTER_LEVEL_1 IN ({in_list})")
+
+    if not wheres:
+        return sql
+
+    fact_pattern = re.compile(r"\bEDW_DEV\.WH\.VW_JEDOX_DATA_OPEX\b", re.I)
+    if not fact_pattern.search(sql):
+        return sql
+
+    join_block  = "\n    ".join(joins)
+    where_block = "\n      AND ".join(wheres)
+
+    filtered_cte = (
+        f"__opex_filtered AS (\n"
+        f"    SELECT f.*\n"
+        f"    FROM EDW_DEV.WH.VW_JEDOX_DATA_OPEX f\n"
+        f"    {join_block}\n"
+        f"    WHERE {where_block}\n"
+        f")"
+    )
+
+    replaced = fact_pattern.sub("__opex_filtered", sql)
+
+    if re.match(r"\s*WITH\b", replaced, re.I):
+        replaced = re.sub(r"(?i)^\s*WITH\s+", "", replaced, count=1)
+        return f"WITH {filtered_cte},\n{replaced}"
+    return f"WITH {filtered_cte}\n{replaced}"
+
+
+def run_query(sql: str) -> pd.DataFrame:
+    return session.sql(sql).to_pandas()
+
+
+# ── CHART DETECTION (from task_v2 — adds scatter / waterfall) ─────────────────
+_TIME_RE = re.compile(r"period|month|year|date|time|quarter|cal_year", re.I)
+_VAR_RE  = re.compile(r"variance|delta|deviation|change|growth|pct|percent|ratio", re.I)
+
+def detect_chart(df: pd.DataFrame) -> str:
+    if df.empty or len(df.columns) < 2:
+        return "table"
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    str_cols = df.select_dtypes(exclude="number").columns.tolist()
+    if not num_cols:
+        return "table"
+    if len(df) == 1:
+        return "kpi"
+    if not str_cols and len(num_cols) == 2:
+        return "scatter"
+    time_cols = [c for c in str_cols if _TIME_RE.search(c)]
+    if time_cols and num_cols:
+        return "line"
+    if len(str_cols) == 1 and num_cols:
+        return "bar" if len(df) <= 20 else "hbar"
+    if len(str_cols) == 2 and len(num_cols) == 1:
+        return "grouped_bar"
+    var_cols = [c for c in num_cols if _VAR_RE.search(c)]
+    if var_cols and str_cols:
+        return "waterfall"
+    return "table"
+
+
+def build_chart(df: pd.DataFrame, chart_type: str, question: str = "") -> bool:
+    num_cols  = df.select_dtypes(include="number").columns.tolist()
+    str_cols  = df.select_dtypes(exclude="number").columns.tolist()
+    time_cols = [c for c in str_cols if _TIME_RE.search(c)]
+    try:
+        if chart_type == "line" and time_cols and num_cols:
+            chart_df = df.sort_values(time_cols[0]).set_index(time_cols[0])[num_cols]
+            st.line_chart(chart_df)
+            return True
+        elif chart_type in ("bar","hbar") and str_cols and num_cols:
+            df_s     = df.sort_values(num_cols[0], ascending=False).head(25)
+            chart_df = df_s.set_index(str_cols[0])[num_cols]
+            st.bar_chart(chart_df)
+            return True
+        elif chart_type == "grouped_bar" and len(str_cols) >= 2 and num_cols:
+            pivot_df = df.pivot_table(
+                index=str_cols[0], columns=str_cols[1],
+                values=num_cols[0], aggfunc="sum"
+            ).fillna(0)
+            st.bar_chart(pivot_df)
+            return True
+        elif chart_type == "waterfall" and str_cols and num_cols:
+            var_cols = [c for c in num_cols if _VAR_RE.search(c)]
+            y_col    = var_cols[0] if var_cols else num_cols[0]
+            df_s     = df.sort_values(y_col, ascending=False).head(25)
+            st.bar_chart(df_s.set_index(str_cols[0])[[y_col]])
+            return True
+        elif chart_type == "scatter" and len(num_cols) >= 2:
+            st.scatter_chart(df, x=num_cols[0], y=num_cols[1])
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def fmt_num(v: float) -> str:
+    if abs(v) >= 1_000_000_000: return f"{v/1_000_000_000:.2f}B"
+    if abs(v) >= 1_000_000:     return f"{v/1_000_000:.2f}M"
+    if abs(v) >= 1_000:         return f"{v/1_000:.1f}K"
+    return f"{v:,.2f}"
+
+def show_kpi_cards(df: pd.DataFrame):
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    cards = "".join(
+        f'<div class="kpi-card">'
+        f'<div class="kpi-label">{c.replace("_"," ").title()}</div>'
+        f'<div class="kpi-value">{fmt_num(df[c].iloc[0])}</div>'
+        f'</div>'
+        for c in num_cols[:6]
+    )
+    st.markdown(f'<div class="kpi-row">{cards}</div>', unsafe_allow_html=True)
+
+
+def generate_narrative(question: str, df: pd.DataFrame) -> str:
+    if df.empty:
+        return ""
+    top    = df.head(8).to_string(index=False, max_colwidth=30)
+    prompt = (
+        f'You are a senior financial analyst writing an executive insight.\n\n'
+        f'Question: "{question}"\n'
+        f'Result rows: {len(df)} | Columns: {", ".join(df.columns)}\n'
+        f'Sample data:\n{top}\n\n'
+        f'Write exactly 2-3 sentences. Be specific with numbers. '
+        f'Highlight the single most important finding. '
+        f'No preamble. Business language.'
+    )
+    try:
+        result = session.sql(
+            f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{LLM_MODEL}', $${prompt}$$) AS RESP"
+        ).to_pandas()
+        return result["RESP"].iloc[0] if not result.empty else ""
+    except Exception as e:
+        return f"(Narrative error: {e})"
+
+
+# ── HIERARCHY ENRICHMENT (pivot-style output) ─────────────────────────────────
+@st.cache_data(ttl=600)
+def load_dim_hierarchy_lookup(dim: str) -> pd.DataFrame:
+    """Full level table for a dimension — used to enrich result tables."""
+    spec = _DIM_HIERARCHY.get(dim)
+    if not spec:
+        return pd.DataFrame()
+    levels = ", ".join(spec["levels"])
+    try:
+        return session.sql(
+            f"SELECT DISTINCT {spec['code_col']}, {levels} FROM {spec['table']}"
+        ).to_pandas()
+    except Exception:
+        return pd.DataFrame()
+
+
+_FACT_TO_DIM = {
+    "ACCOUNT":          ("account",         "ACCOUNT_CODE"),
+    "COST_CENTER":      ("cost_center",      "COST_CENTER_CODE"),
+    "ENTITY":           ("entity",           "ENTITY_CODE"),
+    "FUNCTIONAL_AREA":  ("functional_area",  "FUNC_AREA_CODE"),
+    "PROFIT_CENTER":    ("profit_center",    "PROFIT_CENTER_CODE"),
+}
+
+
+def enrich_with_hierarchy(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    For each dimension code column found in the result, left-join all hierarchy
+    level columns so the download is pivot-ready: L1 → L2 → L3 → L4 → Code → Amounts.
+    Only adds columns not already present — never duplicates.
+    """
+    if df.empty:
+        return df
+    result   = df.copy()
+    col_upper = {c.upper(): c for c in result.columns}
+
+    for fact_col_upper, (dim, code_col) in _FACT_TO_DIM.items():
+        if fact_col_upper not in col_upper:
+            continue
+        spec = _DIM_HIERARCHY.get(dim)
+        if not spec:
+            continue
+        new_levels = [lv for lv in spec["levels"] if lv not in result.columns]
+        if not new_levels:
+            continue
+        lookup = load_dim_hierarchy_lookup(dim)
+        if lookup.empty:
+            continue
+        actual_col = col_upper[fact_col_upper]
+        lookup = lookup.rename(columns={code_col: actual_col})
+        result = result.merge(
+            lookup[[actual_col] + new_levels].drop_duplicates(),
+            on=actual_col, how="left"
+        )
+        # Reorder: put hierarchy levels immediately after the code column
+        all_cols  = result.columns.tolist()
+        code_pos  = all_cols.index(actual_col)
+        hier_cols = [c for c in new_levels if c in all_cols]
+        rest      = [c for c in all_cols if c not in hier_cols]
+        result    = result[rest[:code_pos+1] + hier_cols + rest[code_pos+1:]]
+
+    return result
+
+
+# ── SESSION STATE ──────────────────────────────────────────────────────────────
+for k, v in [("history",[]), ("pending",""),
+              ("show_sql",False), ("show_narr",True), ("show_chart",True),
+              ("auto_run",False)]:
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+# ── SIDEBAR — simplified to FY / Quarter / Month / Currency / L1 scope ───────
+with st.sidebar:
+    st.markdown("## OPEX Agent")
+    st.caption("Cost Analytics & Insights")
+    st.divider()
+
+    # ── Time Period ───────────────────────────────────────────────────────────
+    st.markdown("#### Time Period")
+    sel_years = st.multiselect(
+        "Fiscal Year",
+        options=fiscal_years(),
+        default=[default_year()],
+        help="FY starts October. FY2024 = Oct 2023 - Sep 2024.",
+    )
+    sel_quarters = st.multiselect(
+        "Quarter",
+        options=fiscal_quarters(),
+        default=[],
+        help="Q1=Oct-Dec, Q2=Jan-Mar, Q3=Apr-Jun, Q4=Jul-Sep",
+    )
+    avail_months = available_months_for_quarters(sel_quarters)
+    sel_months = st.multiselect(
+        "Month (optional)",
+        options=avail_months,
+        default=[],
+        help="Leave empty to include all months in the selected quarters.",
+    )
+    active_periods = compute_periods(sel_years, sel_quarters, sel_months)
+    if active_periods:
+        st.caption(f"→ {len(active_periods)} period(s): {active_periods[0]} … {active_periods[-1]}")
+    else:
+        st.caption("Select at least one year and quarter.")
+
+    st.divider()
+
+    # ── Currency ──────────────────────────────────────────────────────────────
+    st.markdown("#### Currency")
+    sel_currency = st.radio(
+        "Value column",
+        options=["EUR","USD","LC","DC"],
+        index=0,
+        horizontal=True,
+        help="EUR = VAL_EUR, USD = VAL_USD_INI, LC = VAL_LC, DC = VAL_EUR_NORM",
+    )
+
+    st.divider()
+
+    # ── Version override (auto-detected from question by default) ─────────────
+    st.markdown("#### Version")
+    st.caption("Auto-detected from question keywords (actual / budget / forecast). Override only if needed.")
+    sel_versions = st.multiselect(
+        "Version override",
+        options=[
+            "Actual","Budget X",
+            "FY26 FCST P01","FY26 FCST P02","FY26 FCST P02 Prelim",
+            "FY26 FCST P03","FY26 FCST P03 Final","FY26 FCST P04",
+            "FY26 FCST P05","FY26 FCST P05 Prelim","FY26 FCST P06",
+            "FY26 FCST P06 Final","FY26 FCST P07","FY26 FCST P08 Prelim",
+        ],
+        default=[],
+        help="Leave blank — version is inferred from your question.",
+    )
+
+    st.divider()
+
+    # ── L1 Dimension Scope (replaces cascading expanders) ─────────────────────
+    st.markdown("#### Scope")
+    st.caption("Broader filters. Deeper levels auto-resolved from your question.")
+
+    sel_account_l1 = st.multiselect(
+        "Account L1",
+        options=["OPEX","Functional Gross Cost excl. ISA","Statistical Accounts","All Accounts"],
+        default=["OPEX"],
+        help="This is an OPEX report — OPEX is always the default.",
+    )
+    sel_entity_l1 = st.multiselect(
+        "Entity L1",
+        options=get_hierarchy_values("entity", 0, {}),
+        default=["Worldwide"] if "Worldwide" in get_hierarchy_values("entity",0,{}) else [],
+    )
+    sel_cc_l1 = st.multiselect(
+        "Cost Center L1",
+        options=get_hierarchy_values("cost_center", 0, {}),
+        default=["All Cost Centers"] if "All Cost Centers" in get_hierarchy_values("cost_center",0,{}) else [],
+    )
+    sel_fa_l1 = st.multiselect(
+        "Functional Area L1",
+        options=get_hierarchy_values("functional_area", 0, {}),
+        default=["Internal Reporting"] if "Internal Reporting" in get_hierarchy_values("functional_area",0,{}) else [],
+    )
+    sel_pc_l1 = st.multiselect(
+        "Profit Center L1",
+        options=get_hierarchy_values("profit_center", 0, {}),
+        default=["All Profit Center"] if "All Profit Center" in get_hierarchy_values("profit_center",0,{}) else [],
+    )
+
+    st.divider()
+
+    # ── Quick Questions ────────────────────────────────────────────────────────
+    st.markdown("#### Quick Questions")
+    for i, q in enumerate(SUGGESTED_QUESTIONS):
+        label = q[:50] + ("..." if len(q) > 50 else "")
+        if st.button(label, key=f"sq{i}", use_container_width=True):
+            st.session_state["pending"]  = q
+            st.session_state["auto_run"] = True
+
+    st.divider()
+
+    # ── Display ────────────────────────────────────────────────────────────────
+    st.markdown("#### Display")
+    st.session_state["show_sql"]   = st.toggle("Show generated SQL",   st.session_state["show_sql"])
+    st.session_state["show_narr"]  = st.toggle("AI narrative",         st.session_state["show_narr"])
+    st.session_state["show_chart"] = st.toggle("Auto-generate charts", st.session_state["show_chart"])
+
+    st.divider()
+    if st.session_state["history"]:
+        if st.button("Clear conversation", use_container_width=True):
+            st.session_state["history"] = []
+            st.rerun()
+    st.caption("Snowflake Cortex Analyst")
+
+
+# ── ASSEMBLE ACTIVE FILTERS ───────────────────────────────────────────────────
+# Versions are empty here — they are merged at query time with auto-detected values
+active_filters = {
+    "periods":          active_periods,
+    "versions":         sel_versions,     # empty = auto-detect from question
+    "currency":         sel_currency,
+    "account_l1":       sel_account_l1,
+    "entity_l1":        sel_entity_l1,
+    "cost_center_l1":   sel_cc_l1,
+    "func_area_l1":     sel_fa_l1,
+    "profit_center_l1": sel_pc_l1,
+}
+
+
+# ── HEADER ────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="header-banner">
+  <h1>OPEX Cost Analytics Agent</h1>
+  <p>Ask any question about operational expenditure - actuals, budget, forecast, variance</p>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown(
+    f'<div class="filter-badge">{filter_summary(active_filters)}</div>',
+    unsafe_allow_html=True,
+)
+
+
+# ── CHAT HISTORY ──────────────────────────────────────────────────────────────
+for turn in st.session_state["history"]:
+    st.markdown(f'<div class="bubble-user">{turn["question"]}</div>', unsafe_allow_html=True)
+
+    if turn.get("error"):
+        st.error(turn["error"])
+    else:
+        # Auto-detected context tags (version + hierarchy matches)
+        tags = ""
+        for v in turn.get("auto_versions",[]):
+            tags += f'<span class="auto-tag tag-ver">📊 {v}</span>'
+        for m in turn.get("hier_matches",[]):
+            tags += f'<span class="auto-tag tag-hier">🔍 {m["matched_value"]} ({m["level_col"]})</span>'
+        if turn.get("auto_periods"):
+            tags += f'<span class="auto-tag tag-per">📅 {len(turn["auto_periods"])} periods</span>'
+        if tags:
+            st.markdown(tags, unsafe_allow_html=True)
+
+        if turn.get("agent_text"):
+            st.markdown(f'<div class="bubble-agent">{turn["agent_text"]}</div>', unsafe_allow_html=True)
+
+        if st.session_state["show_sql"] and turn.get("sql"):
+            with st.expander("Generated SQL", expanded=False):
+                st.code(turn["sql"], language="sql")
+
+        df = turn.get("df")
+        if df is not None and not df.empty:
+            ctype = turn.get("chart_type","table")
+            if st.session_state["show_chart"]:
+                if ctype == "kpi":
+                    show_kpi_cards(df)
+                elif ctype != "table":
+                    build_chart(df, ctype, turn["question"])
+            with st.expander(f"Data - {len(df):,} rows", expanded=(ctype == "table")):
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Download CSV",
+                    df.to_csv(index=False).encode("utf-8"),
+                    "opex_export.csv", "text/csv",
+                    key=f"dl_{id(turn)}",
+                )
+            if st.session_state["show_narr"] and turn.get("narrative"):
+                st.markdown(
+                    f'<div class="narrative-box">{turn["narrative"]}</div>',
+                    unsafe_allow_html=True,
+                )
+        elif df is not None and df.empty:
+            st.info("The query returned no rows for the active filters.")
+
+    st.markdown('<hr class="turn-divider">', unsafe_allow_html=True)
+
+
+# ── INPUT ─────────────────────────────────────────────────────────────────────
+# Capture pending and auto_run BEFORE rendering the input so quick questions work
+_pending_q = st.session_state.get("pending","")
+_auto_run  = st.session_state.get("auto_run", False)
+
+col_q, col_btn = st.columns([6, 1])
+with col_q:
+    user_q = st.text_input(
+        "question",
+        value=_pending_q,
+        placeholder="e.g. Which cost centers are over budget by more than 15%?",
+        label_visibility="collapsed",
+        key="input_box",
+    )
+with col_btn:
+    go = st.button("Analyze", type="primary", use_container_width=True)
+
+# Clear pending after input renders
+if _pending_q:
+    st.session_state["pending"] = ""
+if _auto_run:
+    st.session_state["auto_run"] = False
+
+
+# ── PROCESS ───────────────────────────────────────────────────────────────────
+# Trigger on explicit button click OR on quick-question auto-run
+effective_q = (_pending_q if _auto_run else user_q).strip()
+
+if (go and user_q.strip()) or (_auto_run and _pending_q):
+    question = effective_q
+    turn: dict = {"question": question}
+
+    with st.spinner("Analyzing..."):
+
+        # 1. Detect versions from question (only if no sidebar override)
+        if sel_versions:
+            final_versions = sel_versions
+        else:
+            final_versions = detect_versions_from_question(question, sel_years)
+
+        # 2. Detect hierarchy matches for display tags
+        hier_matches = detect_account_keywords(question)
+
+        # 3. Build final filters (merge auto-detected versions)
+        final_filters = dict(active_filters)
+        final_filters["versions"] = final_versions
+
+        turn["auto_versions"] = final_versions
+        turn["hier_matches"]  = hier_matches
+        turn["auto_periods"]  = active_periods
+
+        # 4. Build enriched question for Cortex Analyst
+        filtered_q = build_filtered_question(question, final_filters)
+
+        try:
+            # 5. Cortex Analyst → SQL (grounded)
+            resp = call_analyst(filtered_q)
+            sql, agent_text = parse_analyst_response(resp)
+            turn["agent_text"] = agent_text
+
+            if sql:
+                # 6. Enforce filters in generated SQL (safety net)
+                sql = enforce_filters(sql, final_filters)
+                turn["sql"] = sql
+
+                # 7. Execute
+                df = run_query(sql)
+
+                # 8. Enrich result with full hierarchy levels (pivot-ready download)
+                df = enrich_with_hierarchy(df)
+
+                turn["df"]         = df
+                turn["chart_type"] = detect_chart(df)
+
+                # 9. Narrative (LLM only writes sentence — never derives numbers)
+                if st.session_state["show_narr"] and not df.empty:
+                    turn["narrative"] = generate_narrative(question, df)
+            else:
+                turn["sql"]        = None
+                turn["df"]         = pd.DataFrame()
+                turn["chart_type"] = "table"
+
+        except Exception as exc:
+            turn["error"] = f"Unexpected error: {exc}"
+
+    st.session_state["history"].append(turn)
+    st.rerun()

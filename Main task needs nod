@@ -1,4 +1,4 @@
-# V3 that works
+# Main task that works
 import streamlit as st
 import pandas as pd
 import json
@@ -788,36 +788,3 @@ if go and user_q.strip():
 
     st.session_state["history"].append(turn)
     st.rerun()
-
-
-## Tasks to be done for more autonomous tasks
-"""
-
-My prompt:
-so I have an idea. Instead of having all these filters which are difficult to set all the time, whz don't we try the following.
-1. if someone asks travel or variable, we fetch it from level 4. What i can do is make those hierachies so that instead of someone choosing opex-variable cost-travel and entertainment-t&E, thet can always get their result in that hierachy since: if travel% in level 4, return table,chart elif travel% in level 3, return... do you understand? I want the tables to have the same hierachies, there is minimal info from codes alone, we need level1-level2-level3-level4-code-aggregations in the tables so that they can download pivot like tables for indepth info. i want it to be as less dashboard and morechatbot as possible. what we can leave in the filters is fiscal year, quarter, month and currency as they are, and level 1 dimensions. for versions, let's make sure to check key words like "actual,cost,value=Actual, bugdet,overbudget,underbugdet, budgeted = BudgetX, forecast,forecasted,forecast for period, = FY26 FCST P* where P* is the period in fiscal year so if they ask for period 3 or Dec in FY 2026, fetch FY26 FCST P03" is all of this possible?
-
-AI Interpretation:
-1. Hierarchy-based NLP routing — Instead of users manually drilling down filters, the chatbot detects keywords in the question and automatically resolves which hierarchy level they're asking about:
-
-"travel" → matches Level 4 in account hierarchy → auto-filter to that level
-If it matches Level 3, use Level 3, etc.
-2. Pivot-style output tables — Results include full hierarchy context: Level1 → Level2 → Level3 → Level4 → Code → Aggregations, so downloads are self-explanatory.
-
-3. Simplified sidebar — Only keep: Fiscal Year, Quarter, Month, Currency, and Level 1 dimensions (as broad context).
-
-4. Version keyword detection — Parse natural language to resolve versions:
-
-"actual/cost/value" → Actual
-"budget/overbudget/underbudget/budgeted" → Budget X
-"forecast/forecasted/forecast for period X" → FY26 FCST P0X (mapping fiscal period months)
-All of this is absolutely possible. The approach would be:
-
-Build a keyword → hierarchy lookup function that queries the dimension tables to find which level a term matches
-Build a version-keyword parser with regex/mapping
-Restructure the query builder to inject hierarchy joins and include all levels in output
-Strip down the sidebar to just time + currency + Level 1
-
-
-
-"""
