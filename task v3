@@ -1,22 +1,16 @@
-# V3 that works
 import streamlit as st
+import os
 import pandas as pd
 import json
 import re
 import requests
 from datetime import date
 
-from snowflake.snowpark.context import get_active_session
-
-try:
-    import _snowflake
-    IN_SIS = True
-except ImportError:
-    IN_SIS = False
-
-SEMANTIC_VIEW = "EDW_DEV.WH.TEST"
+AGENT_DATABASE = "EDW_DEV"
+AGENT_SCHEMA = "WH"
+AGENT_NAME = "COST_ANALYST"
+AGENT_ENDPOINT = f"/api/v2/databases/{AGENT_DATABASE}/schemas/{AGENT_SCHEMA}/agents/{AGENT_NAME}:run"
 LLM_MODEL = "llama3.1-8b"
-ANALYST_URL_SUFFIX = "/api/v2/cortex/analyst/message"
 
 _DIM_TABLES: dict[str, tuple[str, str]] = {
     "entity":          ("ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY",        "ENTITY_CODE"),
@@ -104,11 +98,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource
-def get_session():
-    return get_active_session()
+conn = st.connection("snowflake", ttl=os.getenv("SNOWFLAKE_CONNECTION_TTL"))
+session = conn.session()
 
-session = get_session()
+
+def _get_auth_token() -> str:
+    with open("/snowflake/session/token", "r") as f:
+        return f.read().strip()
+
+
+def _get_host() -> str:
+    return os.getenv("SNOWFLAKE_HOST")
 
 
 def fiscal_years() -> list[str]:
@@ -348,39 +348,39 @@ def filter_summary(filters: dict) -> str:
     return " | ".join(parts) if parts else "No filters - showing all data"
 
 
-def call_analyst(filtered_question: str) -> dict:
+def call_agent(filtered_question: str) -> dict:
+    messages = st.session_state.get("agent_messages", [])
+    messages.append({"role": "user", "content": [{"type": "text", "text": filtered_question}]})
+
     body = {
-        "messages": [{
-            "role": "user",
-            "content": [{"type": "text", "text": filtered_question}],
-        }],
-        "semantic_view": SEMANTIC_VIEW,
+        "model": LLM_MODEL,
+        "messages": messages,
+        "tools": [],
+        "stream": False,
     }
-    if IN_SIS:
-        resp = _snowflake.send_snow_api_request(
-            "POST", ANALYST_URL_SUFFIX, {}, {}, body, {}, 45000
-        )
-        if resp.get("status") != 200:
-            raise RuntimeError(
-                f"Cortex Analyst {resp.get('status')}: {resp.get('content', '(no detail)')}"
-            )
-        return json.loads(resp["content"])
-    else:
-        conn = session.connection
-        token = conn.rest.token
-        host = conn.host
-        url = f"https://{host}{ANALYST_URL_SUFFIX}"
-        headers = {
-            "Authorization": f'Snowflake Token="{token}"',
-            "Content-Type": "application/json",
-        }
-        r = requests.post(url, json=body, headers=headers, timeout=60)
-        if r.status_code != 200:
-            raise RuntimeError(f"Cortex Analyst {r.status_code}: {r.text[:500]}")
-        return r.json()
+
+    token = _get_auth_token()
+    host = _get_host()
+    url = f"https://{host}{AGENT_ENDPOINT}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Snowflake-Authorization-Token-Type": "OAUTH",
+    }
+
+    r = requests.post(url, json=body, headers=headers, timeout=120)
+    if r.status_code != 200:
+        raise RuntimeError(f"Cortex Agent {r.status_code}: {r.text[:500]}")
+
+    resp = r.json()
+    if resp.get("message"):
+        messages.append(resp["message"])
+    st.session_state["agent_messages"] = messages
+    return resp
 
 
-def parse_analyst_response(resp: dict) -> tuple[str | None, str]:
+def parse_agent_response(resp: dict) -> tuple[str | None, str]:
     sql, texts = None, []
     for block in resp.get("message", {}).get("content", []):
         if block.get("type") == "sql":
@@ -566,7 +566,7 @@ def generate_narrative(question: str, df: pd.DataFrame) -> str:
         return f"(Narrative error: {e})"
 
 
-for k, v in [("history",[]), ("pending",""),
+for k, v in [("history",[]), ("pending",""), ("agent_messages", []),
               ("show_sql",False), ("show_narr",True), ("show_chart",True),
               ("auto_run",False)]:
     if k not in st.session_state:
@@ -672,8 +672,9 @@ with st.sidebar:
     if st.session_state["history"]:
         if st.button("Clear conversation", use_container_width=True):
             st.session_state["history"] = []
+            st.session_state["agent_messages"] = []
             st.rerun()
-    st.caption("Snowflake Cortex Analyst")
+    st.caption("Snowflake Cortex Agent")
 
 
 active_filters = {
@@ -763,15 +764,13 @@ if go and user_q.strip():
     question = user_q.strip()
     turn: dict = {"question": question}
 
-    with st.spinner("Analyzing with active filters..."):
-        filtered_q = build_filtered_question(question, active_filters)
+    with st.spinner("Analyzing..."):
         try:
-            resp = call_analyst(filtered_q)
-            sql, agent_text = parse_analyst_response(resp)
+            resp = call_agent(question)
+            sql, agent_text = parse_agent_response(resp)
             turn["agent_text"] = agent_text
 
             if sql:
-                sql = inject_filter_clauses(sql, active_filters)
                 turn["sql"] = sql
                 df = run_query(sql)
                 turn["df"] = df
