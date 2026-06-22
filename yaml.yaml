@@ -1,0 +1,2014 @@
+name: OPEX_TEST_AGENT
+tables:
+  - name: VW_FISCAL_DATE
+    description: The table contains records of fiscal and calendar date mappings, serving as a date dimension reference. Each record represents a single date and includes both calendar attributes (day, week, month, year) and fiscal attributes (week, month, period, quarter, year). Fiscal calendar dimension. The fiscal year starts in OCTOBER and ends in SEPTEMBER. FY2026 runs from October 2025 through September 2026. The TIME column (YYYY-MM format) in the fact table joins to CAL_YEAR_MONTH_NUM in this table.
+    base_table:
+      database: ACC_PRD
+      schema: MASTERDATA
+      table: VW_FISCAL_DATE
+    dimensions:
+      - name: CAL_YEAR_MONTH_NUM
+        description: |
+          The calendar year and month represented as a numeric value in a combined format (e.g., YYYY-MM). Fiscal year-month in YYYY-MM format. Joins to the TIME column in VW_JEDOX_DATA_OPEX.
+        expr: CAL_YEAR_MONTH_NUM
+        data_type: VARCHAR(8)
+        sample_values:
+          - 2001-01
+          - 2001-02
+          - 2001-08
+      - name: FISCAL_MONTH
+        description: The fiscal month represented as a three-character code e.g. Jan. Fiscal month in MMM format. First month of a fiscal year is always Oct.
+        expr: FISC_MONTH
+        data_type: VARCHAR(3)
+        sample_values:
+          - Jan
+          - Mar
+          - Feb
+      - name: FISCAL_PERIOD
+        description: The fiscal period number within the fiscal year.
+        expr: FISC_PERIOD
+        data_type: NUMBER(10,0)
+        sample_values:
+          - '4'
+          - '6'
+          - '5'
+      - name: FISCAL_QTR
+        description: The fiscal quarter represented as a two-character code e.g. Q1. Fiscal quarter. Q1 = Oct-Dec, Q2 = Jan-Mar, Q3 = Apr-Jun, Q4 = Jul-Sep.
+        expr: FISC_QTR
+        data_type: VARCHAR(2)
+        sample_values:
+          - Q3
+          - Q4
+          - Q2
+          - Q1
+      - name: FISCAL_YEAR
+        description: 'Fiscal year number. FY starts in October. FISC_YEAR 2026 covers October 2025 through September 2026. FISC_YEAR 2025 covers October 2024 through September 2025. FISC_YEAR 2024 covers October 2023 through September 2024. and so on. '
+        expr: FISC_YEAR
+        data_type: NUMBER(10,0)
+        sample_values:
+          - '2001'
+          - '2002'
+          - '2003'
+      - name: FISCAL_YEAR_PERIOD
+        description: The fiscal year period, combining the fiscal year and period into a single identifier (e.g., "2023001").
+        expr: FISC_YEAR_PERIOD
+        data_type: VARCHAR(8)
+        sample_values:
+          - 2001-006
+          - 2001-011
+          - 2001-004
+    facts:
+      - name: RECENT_FISCAL_YEARS
+        description: |
+          MANDATORY: Always filter to the current fiscal year by default. Include prior years only if the user asks for trend, comparison, or historical data.
+        expr: FISC_YEAR >= YEAR(CURRENT_DATE()) - 2
+        data_type: BOOLEAN
+        access_modifier: public_access
+        labels:
+          - filter
+    unique_keys:
+      - columns:
+          - CAL_YEAR_MONTH_NUM
+  - name: VW_JEDOX_DATA_OPEX
+    synonyms:
+      - COST_DATA_VIEW
+      - JEDOX_COST_VIEW
+      - JEDOX_OPERATING_EXPENSES
+      - JEDOX_OPEX
+      - OPERATING_COST_DATA
+      - OPERATING_EXPENDITURE_DATA
+      - OPERATIONAL_EXPENSES_VIEW
+      - OPEX_DATA
+      - OPEX_FINANCIALS
+      - OPEX_REPORTING
+    description: 'The table contains records of operational expenditure (OPEX) financial data, likely sourced from a planning or reporting tool. Each record captures cost and value measures across multiple currencies (USD, EUR, and local currency), organized by dimensions such as cost center, profit center, functional area, region, project, and account. OPEX fact table containing financial actuals, budgets, and forecasts. The TIME column is in YYYY-MM format (e.g. ''2026-03'' = March 2026). Fiscal year starts in October: FY2026 = ''2025-10'' through ''2026-09''. When no time period is specified, default to the current fiscal year.'
+    base_table:
+      database: ACC_PRD
+      schema: COST_CENTER
+      table: VW_JEDOX_DATA_OPEX
+    dimensions:
+      - name: ACCOUNT_NUMBER
+        description: GL account code. Joins to ACCOUNT_CODE in VW_JEDOX_MASTER_DATA_ACCOUNT for hierarchy and descriptions. The general ledger account identifier associated with operational expenditure (OPEX) cost center data.
+        expr: ACCOUNT
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - '600599'
+          - '600601'
+          - '600598'
+      - name: COST_CENTER
+        description: Cost center code. Joins to COST_CENTER_CODE in VW_JEDOX_MASTER_DATA_COST_CENTER for hierarchy and descriptions. The cost center code identifying the organizational unit responsible for tracking operational expenditures.
+        expr: COST_CENTER
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - 450171U6Z
+          - 450473U8Q
+          - 450171U3N
+      - name: CURRENCY
+        description: The local currency code (e.g. USD, BRL, CHF). Only relevant when reporting in local currency (VAL_LC). The currency code associated with the operational expenditure (OPEX) financial data.
+        expr: CURRENCY
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - BRL
+          - USD
+          - CHF
+      - name: ENTITY
+        description: Legal entity code. Joins to ENTITY_CODE in VW_JEDOX_MASTER_DATA_ENTITY for geography and hierarchy. The organizational entity or business unit associated with the operational expenditure (OPEX) record.
+        expr: ENTITY
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - E0392
+          - E0245
+          - E0393
+      - name: FUNCTIONAL_AREA
+        description: Functional area code. Joins to FUNC_AREA_CODE in VW_JEDOX_MASTER_DATA_FUNC_AREA for reporting classification. The functional area associated with the operational expenditure (OPEX) cost center entry.
+        expr: FUNCTIONAL_AREA
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - F000
+          - F620
+          - F460
+      - name: FX_TYPE
+        description: Foreign exchange type. Always 'Translated'. Single-valued, no filtering needed. The type of foreign exchange (FX) used in the operational expenditure (OPEX) data.
+        expr: FX_TYPE
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Translated
+      - name: MEASURE
+        description: Always 'Value'. Single-valued dimension, no filtering needed. The name or identifier of the operational expenditure (OPEX) financial measure being tracked or reported.
+        expr: MEASURE
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Value
+      - name: PROFIT_CENTER
+        description: Profit center code. Joins to PROFIT_CENTER_CODE in VW_JEDOX_MASTER_DATA_PROFIT_CENTER for business unit hierarchy. The profit center associated with the operational expenditure record.
+        expr: PROFIT_CENTER
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - '13098000'
+          - '10130000'
+          - '10131101'
+      - name: PROJECT
+        description: Project name associated with the expenditure. Use for project-specific cost analysis. The name or identifier of the project associated with the operational expenditure entry.
+        expr: PROJECT
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Palo Alto -  Maintenance B3-Electrical Upgrade
+          - San Jose - Satellite Manufacturing Site
+          - No Project
+      - name: REGION
+        description: Geographic region code. Usually '~' (not populated). Use ENTITY dimension for geographic analysis instead. The geographic region associated with the operational expenditure (OPEX) cost center data.
+        expr: REGION
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - '~'
+      - name: TIME
+        description: The time period associated with the operational expenditure (OPEX) data entry. Period in YYYY-MM format. Fiscal year starts in October. FY2026 = '2025-10' to '2026-09'. FY2025 = '2024-10' to '2025-09'. FY2024 = '2023-10' to '2024-09'. When user says 'this year' or 'current year', use FY2026.
+        expr: TIME
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - 2024-10
+          - 2026-09
+          - 2025-03
+      - name: VERSION
+        description: |
+          The version identifier of the operational expenditure (OPEX) data record in Jedox. The scenario type. 'Actual' = real incurred costs. 'Budget X' = approved annual budget. Forecast versions follow pattern 'FY26 FCST P01' etc. Default to 'Actual' unless user asks for budget or forecast.
+        expr: VERSION
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - FY26 FCST P02
+          - FY26 FCST P05
+          - FY26 FCST P07
+      - name: WORKFLOW
+        description: Data source workflow (e.g. 'From OPEX', 'ECC', 'Manual'). Indicates where the data originated. Rarely needed for reporting. The workflow stage or process associated with the operational expenditure entry.
+        expr: WORKFLOW
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - From OPEX
+          - ECC
+          - Manual
+    time_dimensions:
+      - name: LAST_REFRESH
+        description: The date and time when the data was last refreshed, stored without timezone information.
+        expr: LAST_REFRESH
+        data_type: TIMESTAMP_NTZ(9)
+        sample_values:
+          - '2026-05-27T08:21:34.250Z'
+    facts:
+      - name: SHS_AVG_MNTHLY_FX_RATE_EUR
+        description: The average monthly foreign exchange rate in Euros (EUR) for Swiss Headquarters (SHS).
+        expr: SHS_AVG_MNTHLY_FX_RATE_EUR
+        data_type: NUMBER(38,20)
+        access_modifier: public_access
+        sample_values:
+          - '1.00000000000000000000'
+          - '0.91026000000000000000'
+          - '1.17675000000000000000'
+      - name: VAL_EUR
+        description: The value in Euros (non-normalized). Only use when the user explicitly asks for 'EUR' or 'non-normalized euros'.
+        expr: VAL_EUR
+        data_type: FLOAT
+        access_modifier: public_access
+        sample_values:
+          - '33.17392875'
+          - '927.72'
+          - '-40.481883497'
+      - name: VAL_EUR_NORM
+        description: 'Mandatory: THIS IS THE DEFAULT VALUE COLUMN. Always use VAL_EUR_NORM unless the user explicitly requests a different currency (USD, EUR, or Local Currency). The normalized value in Euros. '
+        expr: VAL_EUR_NORM
+        data_type: FLOAT
+        access_modifier: public_access
+        sample_values:
+          - '2398.511436867'
+          - '2905.170850615'
+          - '1278.844274485'
+      - name: VAL_LC
+        synonyms:
+          - LC
+          - local currency
+        description: 'Value in local currency. Only use when user explicitly asks for ''local currency'' or ''LC''. MANDATORY: When using VAL_LC, ALWAYS include CURRENCY in the GROUP BY and SELECT — never sum VAL_LC across different currencies as the result would be meaningless. Show each currency separately.'
+        expr: VAL_LC
+        data_type: FLOAT
+        access_modifier: public_access
+        sample_values:
+          - '174.606291667'
+          - '335'
+          - '10.94'
+      - name: VAL_USD_INI
+        synonyms:
+          - dollars
+          - US Dollar
+          - USD
+          - USD INI
+        description: The value in US Dollars. Only use when the user explicitly asks for 'USD' or 'dollars'.
+        expr: VAL_USD_INI
+        data_type: FLOAT
+        access_modifier: public_access
+        sample_values:
+          - '13739.39876641'
+          - '7703.425082379'
+          - '2430.074922023'
+        default_aggregation: 1
+      - name: VERSION_ACTUAL
+        description: |
+          MANDATORY: Always filter to VERSION = 'Actual' in every query unless the user explicitly asks for Budget, Forecast, or a specific version like 'FY26 FCST P01'.
+        expr: VERSION = 'Actual'
+        data_type: BOOLEAN
+        access_modifier: public_access
+        labels:
+          - filter
+  - name: VW_JEDOX_MASTER_DATA_ACCOUNT
+    description: The table contains master data records for financial accounts used in planning and reporting. Each record represents a single account and includes details about account classification, status, and hierarchical groupings across multiple levels.
+    base_table:
+      database: ACC_PRD
+      schema: MASTERDATA
+      table: VW_JEDOX_MASTER_DATA_ACCOUNT
+    dimensions:
+      - name: ACCOUNT_CODE
+        description: Unique GL account identifier. Primary key. Joins to ACCOUNT in the fact table. The unique code identifying an account.
+        expr: ACCOUNT_CODE
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - '829077'
+          - '415077'
+          - '411179'
+      - name: ACCOUNT_CODE_AND_DESC
+        description: Account code concatenated with its description (e.g. '600110 - Labor - Administrative'). Use in final output for readability. The account code combined with its description, typically formatted as a concatenated identifier and label.
+        expr: ACCOUNT_CODE_AND_DESC
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - 601698 - R&D grant from 3rd party - reduction of expenses
+          - 981635 - Project Revenue Setl to COPA - Revenue SVC
+          - 981210 - Service Settlement to Order
+      - name: ACCOUNT_LEVEL_1
+        description: Broadest account grouping (e.g. OPEX, Capex Depreciation). Level 1 is the top of the hierarchy.
+        expr: ACCOUNT_LEVEL_1
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Capex Depreciation
+          - Statistical Accounts
+          - To Be Mapped
+      - name: ACCOUNT_LEVEL_2
+        synonyms:
+          - accounts level 2
+          - drill down to level 2
+          - level 2
+          - second drill down
+          - second level
+        description: 'Second level: major expense categories (e.g. Employee Related, Fixed Cost, Variable Spend).'
+        expr: ACCOUNT_LEVEL_2
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - HC Unit
+          - Headcount
+      - name: ACCOUNT_LEVEL_3
+        synonyms:
+          - account_category_3
+          - account_classification_3
+          - account_depth_3
+          - account_group_3
+          - account_hierarchy_3
+          - account_layer_3
+          - account_tier_3
+          - level_3_account
+          - third_account_level
+          - third_tier_account
+        description: 'Third level: subcategories (e.g. Compensation, Travel and Entertainment, Consulting).'
+        expr: ACCOUNT_LEVEL_3
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Employee Headcount
+          - Interns FTE
+          - FTE Employee
+      - name: ACCOUNT_LEVEL_4
+        synonyms:
+          - account_category_4
+          - account_classification_4
+          - account_depth_4
+          - account_hierarchy_4
+          - account_tier_4
+          - fourth_account_level
+          - fourth_level_classification
+          - fourth_tier_account
+          - hierarchy_level_4
+          - level_4_account
+        description: 'Fourth level: most detailed named category (e.g. Salary, Bonus, T&E, Conferences).'
+        expr: ACCOUNT_LEVEL_4
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Taxes
+          - Business Services
+          - Communications
+      - name: ACCOUNT_LEVEL_5
+        synonyms:
+          - account_category_5
+          - account_classification_5
+          - account_depth_5
+          - account_hierarchy_5
+          - account_tier_5
+          - fifth_account_category
+          - fifth_account_level
+          - fifth_tier_account
+          - hierarchy_level_5
+          - level_5_account
+        description: 'Fifth level: further sub-detail where applicable (e.g. Employee FTE Regular - Direct). Not all accounts have this level populated.'
+        expr: ACCOUNT_LEVEL_5
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Employee FTE Regular - Direct
+          - Employee FTE Fixed Term - Direct
+    facts:
+      - name: OPEX_ACCOUNTS
+        description: |
+          MANDATORY: Always apply ACCOUNT_LEVEL_1 = 'OPEX' in every query unless the user explicitly requests 'All Accounts' or 'Functions Gross Cost excluding ISA'.
+        expr: ACCOUNT_LEVEL_1 IN ('OPEX', 'Functions Gross Cost excl. ISA', 'All Accounts')
+        data_type: BOOLEAN
+        access_modifier: public_access
+        labels:
+          - filter
+    unique_keys:
+      - columns:
+          - ACCOUNT_CODE
+  - name: VW_JEDOX_MASTER_DATA_COST_CENTER
+    description: The table contains master data records for cost centers used in financial planning and reporting. Each record describes a single cost center, including its identifying details, organizational attributes such as business area, entity, function, and associated profit center, as well as its position within a multi-level organizational hierarchy.
+    base_table:
+      database: ACC_PRD
+      schema: MASTERDATA
+      table: VW_JEDOX_MASTER_DATA_COST_CENTER
+    dimensions:
+      - name: COST_CENTER_CODE
+        description: Unique cost center identifier. Primary key. Joins to COST_CENTER in the fact table. The unique code identifying a cost center.
+        expr: COST_CENTER_CODE
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - 400009CH1
+          - '0600'
+          - 708001CN1
+      - name: COST_CENTER_CODE_AND_DESC
+        description: Cost center code with description (e.g. '300701US1 - VIS - Sales'). Use in final output for readability. The combined cost center code and its corresponding description.
+        expr: COST_CENTER_CODE_AND_DESC
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - 45070NL1 -
+          - 400009CH1 -
+          - 708001CN1 - ICB Tubes Sub-Assembly-inactive
+      - name: COST_CENTER_LEVEL_1
+        synonyms:
+          - cost center level 1
+          - cost centers 1
+        description: Broadest cost center grouping (e.g. All Cost Centers, GEO Service).
+        expr: COST_CENTER_LEVEL_1
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - All Cost Centers
+          - GEO Service
+      - name: COST_CENTER_LEVEL_2
+        synonyms:
+          - costc
+        description: 'Second level: organizational divisions (e.g. By Owner, Regions, Corporate).'
+        expr: COST_CENTER_LEVEL_2
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - By Owners
+          - Corporate
+          - Regions
+      - name: COST_CENTER_LEVEL_3
+        description: 'Third level: departments or functions within a division.'
+        expr: COST_CENTER_LEVEL_3
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - VIS
+          - US_Equipment
+          - HU_Equipment
+      - name: COST_CENTER_LEVEL_4
+        description: 'Fourth level: teams or sub-departments. The name or identifier of a cost center at the fourth level of the organizational hierarchy. '
+        expr: COST_CENTER_LEVEL_4
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - VIS R&D
+          - VIS GM
+          - AMS
+    facts:
+      - name: ALL_COST_CENTERS_SCOPE
+        description: Always filter to COST_CENTER_LEVEL_1 = 'All Cost Centers' by default. Only include 'GEO Service' if the user explicitly asks for GEO Service data.
+        expr: COST_CENTER_LEVEL_1 IN ('All Cost Centers', 'GEO Service')
+        data_type: BOOLEAN
+        access_modifier: public_access
+        labels:
+          - filter
+    unique_keys:
+      - columns:
+          - COST_CENTER_CODE
+  - name: VW_JEDOX_MASTER_DATA_ENTITY
+    description: The table contains master data records for organizational entities. Each record describes a single entity and includes details about its geographic attributes such as country and currency, as well as its position within a multi-level organizational hierarchy.
+    base_table:
+      database: ACC_PRD
+      schema: MASTERDATA
+      table: VW_JEDOX_MASTER_DATA_ENTITY
+    dimensions:
+      - name: ENTITY_CODE
+        description: Unique legal entity identifier (e.g. E0530). Primary key. Joins to ENTITY in the fact table. Unique legal entity identifier (e.g. E0530). Primary key. Joins to ENTITY in the fact table.
+        expr: ENTITY_CODE
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - E0530
+          - E0020
+          - E0531
+      - name: ENTITY_CODE_AND_DESC
+        description: Entity code with name (e.g. 'E0530 - Varinak Bulgaria EOOD'). Use in final output for readability. The combined entity code and description, typically concatenating a unique identifier with its corresponding human-readable label.
+        expr: ENTITY_CODE_AND_DESC
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - E0530 - Varinak Bulgaria EOOD
+          - E0528 - VMS Iberica SL Portugal
+          - E0531 - Varinak Europe S.R.L.
+      - name: ENTITY_LEVEL_1
+        description: 'Broadest entity grouping. Top of hierarchy. Values: Worldwide, AREs for HOP etc. Default filter = ''Worldwide''.'
+        expr: ENTITY_LEVEL_1
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Varinak Entity (Project Paris)
+          - Alicon Scion
+          - AREs for HOP
+      - name: ENTITY_LEVEL_2
+        description: 'Second level: major geographic regions. Values: Asia Pacific, Americas, EMEIA, Other, Corporate. The second hierarchical level classification of an entity within the master data structure.'
+        expr: ENTITY_LEVEL_2
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Asia Pacific
+          - Other
+      - name: ENTITY_LEVEL_3
+        synonyms:
+          - entity_classification_3
+          - entity_group_3
+          - entity_hierarchy_3
+          - entity_rank_3
+          - entity_tier_3
+          - hierarchy_level_3
+          - level_3_entity
+          - third_entity_level
+          - third_level_classification
+          - third_tier_entity
+        description: 'Second level: major geographic regions. Values: Asia Pacific, Americas, EMEIA, Other, Corporate. The third hierarchical level of the entity classification within the master data structure.'
+        expr: ENTITY_LEVEL_3
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - APJI
+          - EMEIA w/o VPS DE
+      - name: ENTITY_LEVEL_4
+        synonyms:
+          - entity_classification_4
+          - entity_group_4
+          - entity_hierarchy_4
+          - entity_tier_4
+          - fourth_entity_classification
+          - fourth_entity_tier
+          - fourth_hierarchy_level
+          - fourth_level_category
+          - hierarchy_level_four
+          - level_4_entity
+        description: |-
+          Fourth level: individual countries. Values: Australia, Brazil, Canada, China, Germany, India, Japan, etc. Most granular named level before entity codes.
+           The fourth hierarchical level of the entity classification structure.
+        expr: ENTITY_LEVEL_4
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Taiwan
+          - Hongkong
+    facts:
+      - name: WORLDWIDE_SCOPE
+        description: 'Mandatory: Always filter to ENTITY_LEVEL_1 = ''Worldwide'' by default. Only include ''AREs for HOP'' if the user explicitly asks for Areas for HOP data.'
+        expr: ENTITY_LEVEL_1 IN ('Worldwide', 'AREs for HOP')
+        data_type: BOOLEAN
+        access_modifier: public_access
+        labels:
+          - filter
+    unique_keys:
+      - columns:
+          - ENTITY_CODE
+  - name: VW_JEDOX_MASTER_DATA_FUNC_AREA
+    synonyms:
+      - Functional area
+    description: The table contains master data records for functional areas used in financial or organizational planning. Each record represents a single functional area and includes its code, description, and hierarchical classification across multiple levels. functional area
+    base_table:
+      database: ACC_DEV
+      schema: MASTERDATA
+      table: VW_JEDOX_MASTER_DATA_FUNC_AREA
+    dimensions:
+      - name: FUNC_AREA_CODE
+        description: Unique functional area code (e.g. F000, F620). Primary key. Joins to FUNCTIONAL_AREA in the fact table. The alphanumeric code identifying a functional area.
+        expr: FUNC_AREA_CODE
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - F800
+          - F000
+          - F820
+      - name: FUNC_AREA_CODE_AND_DESC
+        description: Functional area code with label (e.g. 'F620 - R&D'). Use in final output for readability. The functional area code combined with its description, typically formatted as a concatenated identifier and label.
+        expr: FUNC_AREA_CODE_AND_DESC
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - F000 - Default Functional Area
+          - F840 - Interest Inc/(Exp)
+          - F800 - OIE
+      - name: FUNC_AREA_LEVEL_1
+        description: 'Broadest functional area grouping. Top of hierarchy. Values: Internal Reporting, Internal Reporting Excluding OIE, External Reporting, Management Reporting. Default filter = ''Internal Reporting''. The top-level functional area classification in a hierarchy of functional areas.'
+        expr: FUNC_AREA_LEVEL_1
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Internal Reporting Excluding OIE
+          - Management Reporting
+          - External Reporting
+      - name: FUNC_AREA_LEVEL_2
+        description: 'Second level: major functional classifications. Values: R&D, SG&A, Gross Margin, Corp Allocation. The second hierarchical level of the functional area classification.'
+        expr: FUNC_AREA_LEVEL_2
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Research & Development
+          - Operational OIE
+      - name: FUNC_AREA_LEVEL_3
+        description: 'Third level: specific functions. Values: Admin, Marketing & Sales, Cost of Sales. Most granular named level before functional area codes. The third hierarchical level of the functional area classification.'
+        expr: FUNC_AREA_LEVEL_3
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Cost of Sales
+          - Sales & Marketing
+          - Internal Reporting Excluding OIE
+      - name: FUNC_AREA_LEVEL_4
+        synonyms:
+          - fourth_level_functional_area
+          - fourth_sublevel_functional_area
+          - fourth_tier_func_area
+          - func_area_fourth_level
+          - func_area_layer_4
+          - func_area_sublevel_4
+          - function_area_depth_4
+          - functional_area_category_4
+          - functional_area_fourth_tier
+          - functional_area_tier_4
+        description: 'Forth level: specific functions. Values: Admin, Marketing & Sales, Cost of Sales. Most granular named level before functional area codes. The name or identifier of a functional area at the fourth level of the functional area hierarchy.'
+        expr: FUNC_AREA_LEVEL_4
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Admin
+          - Marketing & Sales
+    facts:
+      - name: INTERNAL_REPORTING_SCOPE
+        description: |
+          MANDATORY: Always apply FUNC_AREA_LEVEL_1 = 'Internal Reporting' in every query unless the user explicitly requests 'Internal Reporting Excluding OIE'.
+        expr: FUNC_AREA_LEVEL_1 IN ('Internal Reporting', 'Internal Reporting Excluding OIE')
+        data_type: BOOLEAN
+        access_modifier: public_access
+        labels:
+          - filter
+    unique_keys:
+      - columns:
+          - FUNC_AREA_CODE
+  - name: VW_JEDOX_MASTER_DATA_PROFIT_CENTER
+    description: The table contains master data records for profit centers used in financial reporting. Each record represents a single profit center and includes its identifying code and description, along with its position across multiple levels of a hierarchical organizational structure.
+    base_table:
+      database: ACC_PRD
+      schema: MASTERDATA
+      table: VW_JEDOX_MASTER_DATA_PROFIT_CENTER
+    dimensions:
+      - name: PROFIT_CENTER_CODE
+        description: Unique profit center identifier. Primary key. Joins to PROFIT_CENTER in the fact table. The unique code identifying a profit center.
+        expr: PROFIT_CENTER_CODE
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - '1310811'
+          - '10011541'
+          - '10011531'
+      - name: PROFIT_CENTER_CODE_AND_DESC
+        description: Profit center code with description (e.g. '10011541 - NGDS Adaptive'). Use in final output for readability. The profit center code combined with its description, typically formatted as a concatenated identifier and label.
+        expr: PROFIT_CENTER_CODE_AND_DESC
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - 10011541 - NGDS Adaptive
+          - 10230021 - AOI - Oncology Treatment Provider
+          - 25000000 - Non-Product Related
+      - name: PROFIT_CENTER_LEVEL_1
+        description: 'Broadest profit center grouping. Top of hierarchy. Values: All Profit Center, Alt for MDO, Alt for ROS, SHS VAR. Default filter = ''All Profit Center''. The name or identifier of a profit center at the first (highest) level of the profit center hierarchy.'
+        expr: PROFIT_CENTER_LEVEL_1
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Alt for MDO
+          - All Profit Center
+      - name: PROFIT_CENTER_LEVEL_2
+        description: 'Second level: business segments. Values: Central Item, IO, Product, Service, etc. The name or identifier of a profit center at the second level of the organizational hierarchy.'
+        expr: PROFIT_CENTER_LEVEL_2
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - Central Item
+          - IO
+      - name: PROFIT_CENTER_LEVEL_3
+        description: 'Third level: product/service lines. Values: In vivo Others IO, Asiri, etc. The name or identifier of a profit center at hierarchy level 3.'
+        expr: PROFIT_CENTER_LEVEL_3
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - In vivo Others IO
+          - Asiri
+      - name: PROFIT_CENTER_LEVEL_4
+        synonyms:
+          - fourth_level_profit_center
+          - fourth_tier_profit_center
+          - pc_level_4
+          - pc_tier_4
+          - profit_center_depth_4
+          - profit_center_hierarchy_4
+          - profit_center_layer_4
+          - profit_center_rank_4
+          - profit_center_tier_4
+          - revenue_center_level_4
+        description: |
+          Fourth level: specific business units or product groups. Values: AOS General Global, AOS Regions, ARIA, Eclipse, Field Service ROS, HW, Global Functions, etc. Most granular named level before profit center codes.
+        expr: PROFIT_CENTER_LEVEL_4
+        data_type: VARCHAR(16777216)
+        sample_values:
+          - CCPS General Global
+          - AOS General Global
+    facts:
+      - name: ALL_PROFIT_CENTERS_SCOPE
+        description: 'MANDATORY: Always apply PROFIT_CENTER_LEVEL_1 = ''All Profit Center'' in every query unless the user explicitly requests ''Alt for MDO'', ''Alt for ROS'', or ''SHS VAR''.'
+        expr: PROFIT_CENTER_LEVEL_1 IN ('All Profit Center', 'Alt for MDO', 'Alt for ROS', 'SHS VAR')
+        data_type: BOOLEAN
+        access_modifier: public_access
+        labels:
+          - filter
+    unique_keys:
+      - columns:
+          - PROFIT_CENTER_CODE
+relationships:
+  - name: VW_JEDOX_DATA_OPEX_TO_VW_FISCAL_DATE
+    left_table: VW_JEDOX_DATA_OPEX
+    right_table: VW_FISCAL_DATE
+    relationship_columns:
+      - left_column: TIME
+        right_column: CAL_YEAR_MONTH_NUM
+  - name: VW_JEDOX_DATA_OPEX_TO_VW_JEDOX_MASTER_DATA_ACCOUNT
+    left_table: VW_JEDOX_DATA_OPEX
+    right_table: VW_JEDOX_MASTER_DATA_ACCOUNT
+    relationship_columns:
+      - left_column: ACCOUNT
+        right_column: ACCOUNT_CODE
+  - name: VW_JEDOX_DATA_OPEX_TO_VW_JEDOX_MASTER_DATA_COST_CENTER
+    left_table: VW_JEDOX_DATA_OPEX
+    right_table: VW_JEDOX_MASTER_DATA_COST_CENTER
+    relationship_columns:
+      - left_column: COST_CENTER
+        right_column: COST_CENTER_CODE
+  - name: VW_JEDOX_DATA_OPEX_TO_VW_JEDOX_MASTER_DATA_ENTITY
+    left_table: VW_JEDOX_DATA_OPEX
+    right_table: VW_JEDOX_MASTER_DATA_ENTITY
+    relationship_columns:
+      - left_column: ENTITY
+        right_column: ENTITY_CODE
+  - name: VW_JEDOX_DATA_OPEX_TO_VW_JEDOX_MASTER_DATA_FUNC_AREA
+    left_table: VW_JEDOX_DATA_OPEX
+    right_table: VW_JEDOX_MASTER_DATA_FUNC_AREA
+    relationship_columns:
+      - left_column: FUNCTIONAL_AREA
+        right_column: FUNC_AREA_CODE
+  - name: VW_JEDOX_DATA_OPEX_TO_VW_JEDOX_MASTER_DATA_PROFIT_CENTER
+    left_table: VW_JEDOX_DATA_OPEX
+    right_table: VW_JEDOX_MASTER_DATA_PROFIT_CENTER
+    relationship_columns:
+      - left_column: PROFIT_CENTER
+        right_column: PROFIT_CENTER_CODE
+verified_queries:
+  - name: '"Why did account costs increase? Drill down by account hierarchy."'
+    sql: |-
+      SELECT
+        a.ACCOUNT_LEVEL_1,
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_COST
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+      GROUP BY
+        a.ACCOUNT_LEVEL_1,
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC
+      ORDER BY
+        TOTAL_COST DESC
+    question: Why did account costs increase? Drill down by account hierarchy.
+    verified_at: 1781597179
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Why did cost center spending increase? Drill down by cost center hierarchy."'
+    sql: |
+      SELECT
+        c.COST_CENTER_LEVEL_1,
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_COST
+      FROM ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER c
+        ON f.COST_CENTER = c.COST_CENTER_CODE
+      WHERE f.VERSION = 'Actual'
+        AND c.COST_CENTER_LEVEL_1 = 'All Cost Centers'
+      GROUP BY c.COST_CENTER_LEVEL_1, c.COST_CENTER_LEVEL_2, c.COST_CENTER_LEVEL_3, c.COST_CENTER_LEVEL_4, c.COST_CENTER_CODE_AND_DESC
+      ORDER BY TOTAL_COST DESC
+    question: Why did cost center spending increase? Drill down by cost center hierarchy.
+    verified_at: 1781181968
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Why did profit center costs increase? Drill down by profit center hierarchy.
+      "
+    sql: |
+      SELECT
+        p.PROFIT_CENTER_LEVEL_1,
+        p.PROFIT_CENTER_LEVEL_2,
+        p.PROFIT_CENTER_LEVEL_3,
+        p.PROFIT_CENTER_CODE_AND_DESC,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_COST
+      FROM ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER p
+        ON f.PROFIT_CENTER = p.PROFIT_CENTER_CODE
+      WHERE f.VERSION = 'Actual'
+        AND p.PROFIT_CENTER_LEVEL_1 = 'All Profit Center'
+      GROUP BY p.PROFIT_CENTER_LEVEL_1, p.PROFIT_CENTER_LEVEL_2, p.PROFIT_CENTER_LEVEL_3, p.PROFIT_CENTER_CODE_AND_DESC
+      ORDER BY TOTAL_COST DESC
+    question: |
+      Why did profit center costs increase? Drill down by profit center hierarchy.
+    verified_at: 1781181996
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"what is the reason for cost increase by account? Explain the cost drivers"'
+    sql: |-
+      SELECT
+        a.ACCOUNT_LEVEL_1,
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_COST
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+      GROUP BY
+        a.ACCOUNT_LEVEL_1,
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC
+      ORDER BY
+        TOTAL_COST DESC
+    question: what is the reason for cost increase by account? Explain the cost drivers
+    verified_at: 1781186176
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "What are the top 10 cost centers by travel and entertainment spend?
+      "
+    sql: |-
+      SELECT
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_T_AND_E_SPEND
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER c ON f.COST_CENTER = c.COST_CENTER_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_3 = 'Travel and Entertainment'
+        AND c.COST_CENTER_LEVEL_1 IN ('All Cost Centers', 'GEO Service')
+      GROUP BY
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4
+      ORDER BY
+        TOTAL_T_AND_E_SPEND DESC
+      LIMIT
+        10
+    question: |
+      What are the top 10 cost centers by travel and entertainment spend?
+    verified_at: 1781597249
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Show travel and entertainment spend by GEO Service? drilling down the cost center hierarchy.
+      "
+    sql: |-
+      SELECT
+        c.COST_CENTER_LEVEL_1,
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC,
+        a.ACCOUNT_LEVEL_4 AS T_AND_E_CATEGORY,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_T_AND_E_SPEND
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER c ON f.COST_CENTER = c.COST_CENTER_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_3 = 'Travel and Entertainment'
+        AND c.COST_CENTER_LEVEL_1 = 'GEO Service'
+      GROUP BY
+        c.COST_CENTER_LEVEL_1,
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC,
+        a.ACCOUNT_LEVEL_4
+      ORDER BY
+        TOTAL_T_AND_E_SPEND DESC
+    question: |
+      Show travel and entertainment spend by GEO Service? drilling down the cost center hierarchy.
+    verified_at: 1781268917
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Show travel and entertainment spend by GEO Service, drilling down the cost center hierarchy.
+      "
+    sql: |+
+      SELECT
+        c.COST_CENTER_LEVEL_1,
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC,
+        a.ACCOUNT_LEVEL_4 AS T_AND_E_CATEGORY,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_T_AND_E_SPEND
+      FROM ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a
+        ON f.ACCOUNT = a.ACCOUNT_CODE
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER c
+        ON f.COST_CENTER = c.COST_CENTER_CODE
+      WHERE f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_3 = 'Travel and Entertainment'
+        AND c.COST_CENTER_LEVEL_1 = 'GEO Service'
+      GROUP BY c.COST_CENTER_LEVEL_1, c.COST_CENTER_LEVEL_2, c.COST_CENTER_LEVEL_3, c.COST_CENTER_LEVEL_4, c.COST_CENTER_CODE_AND_DESC, a.ACCOUNT_LEVEL_4
+      ORDER BY TOTAL_T_AND_E_SPEND DESC
+
+    question: |
+      Show travel and entertainment spend by GEO Service, drilling down the cost center hierarchy.
+    verified_at: 1781186401
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Diagnose spending breakdown by account hierarchy"'
+    sql: |+
+      SELECT
+        a.ACCOUNT_LEVEL_1,
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC AS ACCOUNT,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END) AS ACTUAL,
+        SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS BUDGET,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+          - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS VARIANCE,
+        ROUND(
+          (SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+           - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END))
+          / NULLIF(SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END), 0) * 100
+        , 1) AS VARIANCE_PCT
+      FROM EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a
+        ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE f.VERSION IN ('Actual', 'Budget X')
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+      GROUP BY a.ACCOUNT_LEVEL_1, a.ACCOUNT_LEVEL_2, a.ACCOUNT_LEVEL_3, a.ACCOUNT_LEVEL_4, a.ACCOUNT_CODE_AND_DESC
+      HAVING ACTUAL != 0 OR BUDGET != 0
+      ORDER BY VARIANCE DESC
+
+    question: Diagnose spending breakdown by account hierarchy
+    verified_at: 1781186498
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Diagnose spending breakdown by cost center hierarchy"'
+    sql: |-
+      SELECT
+        c.COST_CENTER_LEVEL_1,
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC AS COST_CENTER,
+        SUM(
+          CASE
+            WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS ACTUAL,
+        SUM(
+          CASE
+            WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS BUDGET,
+        SUM(
+          CASE
+            WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS VARIANCE,
+        ROUND(
+          (
+            SUM(
+              CASE
+                WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            ) - SUM(
+              CASE
+                WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            )
+          ) / NULLIF(
+            SUM(
+              CASE
+                WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            ),
+            0
+          ) * 100,
+          1
+        ) AS VARIANCE_PCT
+      FROM
+        EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER c ON f.COST_CENTER = c.COST_CENTER_CODE
+      WHERE
+        f.VERSION IN ('Actual', 'Budget X')
+        AND c.COST_CENTER_LEVEL_1 = 'All Cost Centers'
+      GROUP BY
+        c.COST_CENTER_LEVEL_1,
+        c.COST_CENTER_LEVEL_2,
+        c.COST_CENTER_LEVEL_3,
+        c.COST_CENTER_LEVEL_4,
+        c.COST_CENTER_CODE_AND_DESC
+      HAVING
+        ACTUAL != 0
+        OR BUDGET != 0
+      ORDER BY
+        VARIANCE DESC
+    question: Diagnose spending breakdown by cost center hierarchy
+    verified_at: 1781189294
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Diagnose spending breakdown by account hierarchy for current FY"'
+    sql: |-
+      SELECT
+        a.ACCOUNT_LEVEL_1,
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC AS ACCOUNT,
+        SUM(
+          CASE
+            WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS ACTUAL,
+        SUM(
+          CASE
+            WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS BUDGET,
+        SUM(
+          CASE
+            WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS VARIANCE,
+        ROUND(
+          (
+            SUM(
+              CASE
+                WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            ) - SUM(
+              CASE
+                WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            )
+          ) / NULLIF(
+            SUM(
+              CASE
+                WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            ),
+            0
+          ) * 100,
+          1
+        ) AS VARIANCE_PCT
+      FROM
+        EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE
+        f.VERSION IN ('Actual', 'Budget X')
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+        AND f.TIME BETWEEN '2025-10'
+        AND '2026-09'
+      GROUP BY
+        a.ACCOUNT_LEVEL_1,
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC
+      HAVING
+        ACTUAL != 0
+        OR BUDGET != 0
+      ORDER BY
+        VARIANCE DESC
+    question: Diagnose spending breakdown by account hierarchy for current FY
+    verified_at: 1781189343
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Diagnose spending breakdown by profit center hierarchy
+      "
+    sql: |+
+      SELECT
+        p.PROFIT_CENTER_LEVEL_1,
+        p.PROFIT_CENTER_LEVEL_2,
+        p.PROFIT_CENTER_LEVEL_3,
+        p.PROFIT_CENTER_LEVEL_4,
+        p.PROFIT_CENTER_CODE_AND_DESC AS PROFIT_CENTER,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END) AS ACTUAL,
+        SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS BUDGET,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+          - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS VARIANCE,
+        ROUND(
+          (SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+           - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END))
+          / NULLIF(SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END), 0) * 100
+        , 1) AS VARIANCE_PCT
+      FROM EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_PROFIT_CENTER p
+        ON f.PROFIT_CENTER = p.PROFIT_CENTER_CODE
+      WHERE f.VERSION IN ('Actual', 'Budget X')
+        AND p.PROFIT_CENTER_LEVEL_1 = 'All Profit Center'
+      GROUP BY p.PROFIT_CENTER_LEVEL_1, p.PROFIT_CENTER_LEVEL_2, p.PROFIT_CENTER_LEVEL_3, p.PROFIT_CENTER_LEVEL_4, p.PROFIT_CENTER_CODE_AND_DESC
+      HAVING ACTUAL != 0 OR BUDGET != 0
+      ORDER BY VARIANCE DESC
+
+    question: |
+      Diagnose spending breakdown by profit center hierarchy
+    verified_at: 1781187543
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Diagnose spending breakdown by entity hierarchy.
+      "
+    sql: |
+      SELECT
+        e.ENTITY_LEVEL_1,
+        e.ENTITY_LEVEL_2,
+        e.ENTITY_LEVEL_3,
+        e.ENTITY_LEVEL_4,
+        e.ENTITY_CODE_AND_DESC AS ENTITY,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END) AS ACTUAL,
+        SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS BUDGET,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+          - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS VARIANCE,
+        ROUND(
+          (SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+           - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END))
+          / NULLIF(SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END), 0) * 100
+        , 1) AS VARIANCE_PCT
+      FROM EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY e
+        ON f.ENTITY = e.ENTITY_CODE
+      WHERE f.VERSION IN ('Actual', 'Budget X')
+        AND e.ENTITY_LEVEL_1 = 'Worldwide'
+      GROUP BY e.ENTITY_LEVEL_1, e.ENTITY_LEVEL_2, e.ENTITY_LEVEL_3, e.ENTITY_LEVEL_4, e.ENTITY_CODE_AND_DESC
+      HAVING ACTUAL != 0 OR BUDGET != 0
+      ORDER BY VARIANCE DESC
+    question: |
+      Diagnose spending breakdown by entity hierarchy.
+    verified_at: 1781187577
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"What is driving costs? Full diagnostic across accounts, cost centers, and entities."'
+    sql: |
+      SELECT
+        a.ACCOUNT_LEVEL_2 AS ACCOUNT_GROUP,
+        a.ACCOUNT_LEVEL_3 AS ACCOUNT_SUBGROUP,
+        c.COST_CENTER_LEVEL_2 AS CC_GROUP,
+        e.ENTITY_LEVEL_2 AS ENTITY_REGION,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END) AS ACTUAL,
+        SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS BUDGET,
+        SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+          - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END) AS VARIANCE,
+        ROUND(
+          (SUM(CASE WHEN f.VERSION = 'Actual' THEN f.VAL_EUR_NORM ELSE 0 END)
+           - SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END))
+          / NULLIF(SUM(CASE WHEN f.VERSION = 'Budget X' THEN f.VAL_EUR_NORM ELSE 0 END), 0) * 100
+        , 1) AS VARIANCE_PCT
+      FROM EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER c ON f.COST_CENTER = c.COST_CENTER_CODE
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY e ON f.ENTITY = e.ENTITY_CODE
+      WHERE f.VERSION IN ('Actual', 'Budget X')
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+        AND c.COST_CENTER_LEVEL_1 = 'All Cost Centers'
+        AND e.ENTITY_LEVEL_1 = 'Worldwide'
+      GROUP BY a.ACCOUNT_LEVEL_2, a.ACCOUNT_LEVEL_3, c.COST_CENTER_LEVEL_2, e.ENTITY_LEVEL_2
+      HAVING ACTUAL != 0 OR BUDGET != 0
+      ORDER BY VARIANCE DESC
+    question: What is driving costs? Full diagnostic across accounts, cost centers, and entities.
+    verified_at: 1781187605
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Compare this fiscal year vs last fiscal year by cost center.  Year-over-year cost center comparison. Where did spending change the most?
+
+      "
+    sql: |-
+      WITH current_fy_periods AS (
+        SELECT
+          DISTINCT TIME
+        FROM
+          ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX
+        WHERE
+          VERSION = 'Actual'
+          AND TIME >= '2025-10'
+          AND TIME <= '2026-09'
+      ),
+      prior_fy_periods AS (
+        SELECT
+          DISTINCT TIME
+        FROM
+          ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX
+        WHERE
+          VERSION = 'Actual'
+          AND TIME >= '2024-10'
+          AND TIME <= '2025-09'
+          AND SUBSTR(TIME, 6, 2) IN (
+            SELECT
+              SUBSTR(TIME, 6, 2)
+            FROM
+              current_fy_periods
+          )
+      )
+      SELECT
+        cc.COST_CENTER_LEVEL_2,
+        cc.COST_CENTER_LEVEL_3,
+        cc.cost_center_level_4,
+        cc.COST_CENTER_CODE_AND_DESC,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                current_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS FY2026_ACTUAL,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                prior_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS FY2025_ACTUAL,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                current_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                prior_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS YOY_CHANGE
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER cc ON f.COST_CENTER = cc.COST_CENTER_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND (
+          f.TIME IN (
+            SELECT
+              TIME
+            FROM
+              current_fy_periods
+          )
+          OR f.TIME IN (
+            SELECT
+              TIME
+            FROM
+              prior_fy_periods
+          )
+        )
+        AND cc.COST_CENTER_LEVEL_1 = 'All Cost Centers'
+        AND cc.COST_CENTER_LEVEL_2 = 'By Owner'
+      GROUP BY
+        1,
+        2,
+        3,
+        4
+      HAVING
+        ABS(YOY_CHANGE) > 0
+      ORDER BY
+        YOY_CHANGE DESC
+      LIMIT
+        20
+    question: |+
+      Compare this fiscal year vs last fiscal year by cost center.  Year-over-year cost center comparison. Where did spending change the most?
+
+    verified_at: 1781270689
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Compare spending this fiscal year vs prior year by entity. Which regions changed the most?
+      "
+    sql: |-
+      WITH fy_bounds AS (
+          SELECT
+              CASE WHEN MONTH(CURRENT_DATE()) >= 10
+                   THEN YEAR(CURRENT_DATE()) || '-10'
+                   ELSE (YEAR(CURRENT_DATE()) - 1) || '-10'
+              END AS fy_start,
+              CASE WHEN MONTH(CURRENT_DATE()) >= 10
+                   THEN (YEAR(CURRENT_DATE()) + 1) || '-09'
+                   ELSE YEAR(CURRENT_DATE()) || '-09'
+              END AS fy_end,
+              CASE WHEN MONTH(CURRENT_DATE()) >= 10
+                   THEN (YEAR(CURRENT_DATE()) - 1) || '-10'
+                   ELSE (YEAR(CURRENT_DATE()) - 2) || '-10'
+              END AS pfy_start,
+              CASE WHEN MONTH(CURRENT_DATE()) >= 10
+                   THEN YEAR(CURRENT_DATE()) || '-09'
+                   ELSE (YEAR(CURRENT_DATE()) - 1) || '-09'
+              END AS pfy_end
+      ),
+      current_fy_periods AS (
+          SELECT DISTINCT f.TIME
+          FROM ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f, fy_bounds b
+          WHERE f.VERSION = 'Actual'
+            AND f.TIME >= b.fy_start AND f.TIME <= b.fy_end
+      ),
+      prior_fy_periods AS (
+          SELECT DISTINCT f.TIME
+          FROM ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f, fy_bounds b
+          WHERE f.VERSION = 'Actual'
+            AND f.TIME >= b.pfy_start AND f.TIME <= b.pfy_end
+            AND SUBSTR(f.TIME, 6, 2) IN (SELECT SUBSTR(TIME, 6, 2) FROM current_fy_periods)
+      )
+      SELECT
+          ent.ENTITY_LEVEL_2,
+          ent.entity_level_3,
+          ent.entity_level_4,
+          ent.entity_code_and_desc,
+          SUM(CASE WHEN f.TIME IN (SELECT TIME FROM current_fy_periods) THEN f.VAL_EUR_NORM ELSE 0 END) AS CURRENT_FY_ACTUAL,
+          SUM(CASE WHEN f.TIME IN (SELECT TIME FROM prior_fy_periods) THEN f.VAL_EUR_NORM ELSE 0 END) AS PRIOR_FY_ACTUAL,
+          SUM(CASE WHEN f.TIME IN (SELECT TIME FROM current_fy_periods) THEN f.VAL_EUR_NORM ELSE 0 END)
+          - SUM(CASE WHEN f.TIME IN (SELECT TIME FROM prior_fy_periods) THEN f.VAL_EUR_NORM ELSE 0 END) AS YOY_CHANGE
+      FROM ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY ent ON f.ENTITY = ent.entity_code
+      WHERE f.VERSION = 'Actual'
+        AND (f.TIME IN (SELECT TIME FROM current_fy_periods) OR f.TIME IN (SELECT TIME FROM prior_fy_periods))
+      GROUP BY 1, 2, 3, 4
+      HAVING ABS(YOY_CHANGE) > 0
+      ORDER BY YOY_CHANGE DESC
+    question: |
+      Compare spending this fiscal year vs prior year by entity. Which regions changed the most?
+    verified_at: 1781270511
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      "Show monthly spending trend comparing this fiscal year to last year, month by month.
+      "
+    sql: |
+      SELECT
+        f.TIME AS PERIOD,
+        CASE
+          WHEN f.TIME BETWEEN '2025-10' AND '2026-09' THEN 'FY2026'
+          WHEN f.TIME BETWEEN '2024-10' AND '2025-09' THEN 'FY2025'
+        END AS FISCAL_YEAR,
+        RIGHT(f.TIME, 2) AS MONTH_NUM,
+        SUM(f.VAL_EUR_NORM) AS TOTAL_SPEND
+      FROM EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+      JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a
+        ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+        AND f.TIME >= '2024-10'
+      GROUP BY f.TIME, FISCAL_YEAR, MONTH_NUM
+      ORDER BY f.TIME
+    question: |
+      Show monthly spending trend comparing this fiscal year to last year, month by month.
+    verified_at: 1781187762
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: |-
+      " Which accounts show cost reductions year over year? Identify efficiency gains and savings.
+      "
+    sql: |-
+      SELECT
+        a.ACCOUNT_LEVEL_2 AS ACCOUNT_CATEGORY,
+        a.ACCOUNT_LEVEL_3 AS ACCOUNT_SUBCATEGORY,
+        a.ACCOUNT_LEVEL_4 AS ACCOUNT_DETAIL,
+        a.ACCOUNT_CODE_AND_DESC AS ACCOUNT,
+        
+        ROUND(SUM(
+          CASE
+            WHEN f.TIME BETWEEN '2025-10'
+            AND '2026-09' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ), 2) AS FY2026_ACTUAL,
+        ROUND(SUM(
+          CASE
+            WHEN f.TIME BETWEEN '2024-10'
+            AND '2025-09' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ),2) AS FY2025_ACTUAL,
+        ROUND((SUM(
+          CASE
+            WHEN f.TIME BETWEEN '2025-10'
+            AND '2026-09' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.TIME BETWEEN '2024-10'
+            AND '2025-09' THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        )), 2) AS YOY_SAVINGS,
+        ROUND(
+          (
+            SUM(
+              CASE
+                WHEN f.TIME BETWEEN '2025-10'
+                AND '2026-09' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            ) - SUM(
+              CASE
+                WHEN f.TIME BETWEEN '2024-10'
+                AND '2025-09' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            )
+          ) / NULLIF(
+            SUM(
+              CASE
+                WHEN f.TIME BETWEEN '2024-10'
+                AND '2025-09' THEN f.VAL_EUR_NORM
+                ELSE 0
+              END
+            ),
+            0
+          ) * 100,
+          1
+        ) AS REDUCTION_PCT,
+        CASE
+          WHEN ROUND(
+            (
+              SUM(
+                CASE
+                  WHEN f.TIME BETWEEN '2025-10'
+                  AND '2026-09' THEN f.VAL_EUR_NORM
+                  ELSE 0
+                END
+              ) - SUM(
+                CASE
+                  WHEN f.TIME BETWEEN '2024-10'
+                  AND '2025-09' THEN f.VAL_EUR_NORM
+                  ELSE 0
+                END
+              )
+            ) / NULLIF(
+              SUM(
+                CASE
+                  WHEN f.TIME BETWEEN '2024-10'
+                  AND '2025-09' THEN f.VAL_EUR_NORM
+                  ELSE 0
+                END
+              ),
+              0
+            ) * 100,
+            1
+          ) <= -20 THEN 'MAJOR REDUCTION (>20%)'
+          WHEN ROUND(
+            (
+              SUM(
+                CASE
+                  WHEN f.TIME BETWEEN '2025-10'
+                  AND '2026-09' THEN f.VAL_EUR_NORM
+                  ELSE 0
+                END
+              ) - SUM(
+                CASE
+                  WHEN f.TIME BETWEEN '2024-10'
+                  AND '2025-09' THEN f.VAL_EUR_NORM
+                  ELSE 0
+                END
+              )
+            ) / NULLIF(
+              SUM(
+                CASE
+                  WHEN f.TIME BETWEEN '2024-10'
+                  AND '2025-09' THEN f.VAL_EUR_NORM
+                  ELSE 0
+                END
+              ),
+              0
+            ) * 100,
+            1
+          ) <= -10 THEN 'SIGNIFICANT REDUCTION (10-20%)'
+          ELSE 'MODERATE REDUCTION (<10%)'
+        END AS EFFICIENCY_TIER
+      FROM
+        EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+      GROUP BY
+        a.ACCOUNT_LEVEL_2,
+        a.ACCOUNT_LEVEL_3,
+        a.ACCOUNT_LEVEL_4,
+        a.ACCOUNT_CODE_AND_DESC
+      HAVING
+        FY2025_ACTUAL > 0
+        AND FY2026_ACTUAL < FY2025_ACTUAL
+      ORDER BY
+        YOY_SAVINGS ASC
+    question: |2
+       Which accounts show cost reductions year over year? Identify efficiency gains and savings.
+    verified_at: 1781192381
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Show total OPEX spend by account category with formatted values in thousands and millions."'
+    sql: |-
+      SELECT
+        a.ACCOUNT_LEVEL_2 AS CATEGORY,
+        TO_CHAR(SUM(f.VAL_EUR_NORM), '999,999,999,990.00') AS VALUE,
+        TO_CHAR(SUM(f.VAL_EUR_NORM) / 1000, '999,999,990.00') AS VALUE_K,
+        TO_CHAR(SUM(f.VAL_EUR_NORM) / 1000000, '999,990.00') AS VALUE_M
+      FROM
+        EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+        AND f.TIME BETWEEN '2025-10'
+        AND '2026-09'
+      GROUP BY
+        a.ACCOUNT_LEVEL_2
+      ORDER BY
+        VALUE DESC
+    question: Show total OPEX spend by account category with formatted values in thousands and millions.
+    verified_at: 1781273428
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Show total spend in local currency broken down by currency."'
+    sql: |-
+      SELECT
+        f.CURRENCY,
+        a.ACCOUNT_LEVEL_2 AS CATEGORY,
+        TO_CHAR(SUM(f.VAL_LC), '999,999,999,990.00') AS TOTAL_LOCAL_CURRENCY,
+        COUNT(DISTINCT f.COST_CENTER) AS NUM_COST_CENTERS
+      FROM
+        EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+        AND f.TIME BETWEEN '2025-10'
+        AND '2026-09'
+      GROUP BY
+        f.CURRENCY,
+        a.ACCOUNT_LEVEL_2
+      ORDER BY
+        f.CURRENCY,
+        TOTAL_LOCAL_CURRENCY DESC
+    question: Show total spend in local currency broken down by currency.
+    verified_at: 1781273178
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Show spending in local currency by entity, grouped by currency."'
+    sql: |-
+      SELECT
+        f.CURRENCY,
+        e.ENTITY_LEVEL_2 AS REGION,
+        e.ENTITY_LEVEL_4 AS COUNTRY,
+        e.ENTITY_CODE_AND_DESC AS ENTITY,
+        TO_CHAR(SUM(f.VAL_LC), '999,999,999,990.00') AS TOTAL_LOCAL_CURRENCY,
+        TO_CHAR(SUM(f.VAL_EUR_NORM), '999,999,999,990.00') AS EUR_EQUIVALENT
+      FROM
+        EDW_DEV.WH.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ENTITY e ON f.ENTITY = e.ENTITY_CODE
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT a ON f.ACCOUNT = a.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND a.ACCOUNT_LEVEL_1 = 'OPEX'
+        AND e.ENTITY_LEVEL_1 = 'Worldwide'
+        AND f.TIME BETWEEN '2025-10'
+        AND '2026-09'
+      GROUP BY
+        f.CURRENCY,
+        e.ENTITY_LEVEL_2,
+        e.ENTITY_LEVEL_4,
+        e.ENTITY_CODE_AND_DESC
+      ORDER BY
+        f.CURRENCY,
+        TOTAL_LOCAL_CURRENCY DESC
+    question: Show spending in local currency by entity, grouped by currency.
+    verified_at: 1781273165
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Compare this fiscal year vs last fiscal year by account. Where are the biggest changes?"'
+    sql: |-
+      WITH fy_bounds AS (
+        SELECT
+          CASE
+            WHEN MONTH(CURRENT_DATE()) >= 10 THEN YEAR(CURRENT_DATE()) || '-10'
+            ELSE (YEAR(CURRENT_DATE()) - 1) || '-10'
+          END AS fy_start,
+          CASE
+            WHEN MONTH(CURRENT_DATE()) >= 10 THEN (YEAR(CURRENT_DATE()) + 1) || '-09'
+            ELSE YEAR(CURRENT_DATE()) || '-09'
+          END AS fy_end,
+          CASE
+            WHEN MONTH(CURRENT_DATE()) >= 10 THEN (YEAR(CURRENT_DATE()) - 1) || '-10'
+            ELSE (YEAR(CURRENT_DATE()) - 2) || '-10'
+          END AS pfy_start,
+          CASE
+            WHEN MONTH(CURRENT_DATE()) >= 10 THEN YEAR(CURRENT_DATE()) || '-09'
+            ELSE (YEAR(CURRENT_DATE()) - 1) || '-09'
+          END AS pfy_end
+      ),
+      current_fy_periods AS (
+        SELECT
+          DISTINCT f.TIME
+        FROM
+          ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f,
+          fy_bounds b
+        WHERE
+          f.VERSION = 'Actual'
+          AND f.TIME >= b.fy_start
+          AND f.TIME <= b.fy_end
+      ),
+      prior_fy_periods AS (
+        SELECT
+          DISTINCT f.TIME
+        FROM
+          ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f,
+          fy_bounds b
+        WHERE
+          f.VERSION = 'Actual'
+          AND f.TIME >= b.pfy_start
+          AND f.TIME <= b.pfy_end
+          AND SUBSTR(f.TIME, 6, 2) IN (
+            SELECT
+              SUBSTR(TIME, 6, 2)
+            FROM
+              current_fy_periods
+          )
+      )
+      SELECT
+        acct.ACCOUNT_LEVEL_2,
+        acct.ACCOUNT_LEVEL_3,
+        acct.ACCOUNT_LEVEL_4,
+        acct.ACCOUNT_CODE_AND_DESC,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                current_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS CURRENT_FY_ACTUAL,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                prior_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS PRIOR_FY_ACTUAL,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                current_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                prior_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS YOY_CHANGE
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT acct ON f.ACCOUNT = acct.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND (
+          f.TIME IN (
+            SELECT
+              TIME
+            FROM
+              current_fy_periods
+          )
+          OR f.TIME IN (
+            SELECT
+              TIME
+            FROM
+              prior_fy_periods
+          )
+        )
+        AND acct.ACCOUNT_LEVEL_1 = 'OPEX'
+      GROUP BY
+        1,
+        2,
+        3,
+        4
+      HAVING
+        ABS(YOY_CHANGE) > 0
+      ORDER BY
+        YOY_CHANGE DESC;
+    question: Compare this fiscal year vs last fiscal year by account. Where are the biggest changes?
+    verified_at: 1781273155
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Compare the cost for March this fiscal year vs March last fiscal year by account hierarchy"'
+    sql: |-
+      WITH fy_bounds AS (
+        SELECT
+          CASE
+            WHEN MONTH(CURRENT_DATE()) >= 10 THEN YEAR(CURRENT_DATE())
+            ELSE YEAR(CURRENT_DATE()) - 1
+          END AS fy_start_year
+      ),
+      target_periods AS (
+        SELECT
+          (b.fy_start_year + 1) || '-03' AS current_period,
+          b.fy_start_year || '-03' AS prior_period
+        FROM
+          fy_bounds b
+      )
+      SELECT
+        acct.ACCOUNT_LEVEL_2,
+        acct.ACCOUNT_LEVEL_3,
+        acct.ACCOUNT_LEVEL_4,
+        acct.ACCOUNT_CODE_AND_DESC,
+        SUM(
+          CASE
+            WHEN f.TIME = t.current_period THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS THIS_YEAR_MARCH,
+        SUM(
+          CASE
+            WHEN f.TIME = t.prior_period THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS LAST_YEAR_MARCH,
+        SUM(
+          CASE
+            WHEN f.TIME = t.current_period THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.TIME = t.prior_period THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS YOY_CHANGE
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        CROSS JOIN target_periods t
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT acct ON f.ACCOUNT = acct.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND f.TIME IN (t.current_period, t.prior_period)
+        AND acct.ACCOUNT_LEVEL_1 = 'OPEX'
+      GROUP BY
+        1,
+        2,
+        3,
+        4
+      HAVING
+        ABS(YOY_CHANGE) > 0
+      ORDER BY
+        YOY_CHANGE DESC
+    question: Compare the cost for March this fiscal year vs March last fiscal year by account hierarchy
+    verified_at: 1781273143
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Show month over month OPEX change by account. What changed between the last two months?"'
+    sql: |-
+      WITH fy_bounds AS (
+        SELECT
+          CASE
+            WHEN MONTH(CURRENT_DATE()) >= 10 THEN YEAR(CURRENT_DATE())
+            ELSE YEAR(CURRENT_DATE()) - 1
+          END AS fy_start_year
+      ),
+      latest_periods AS (
+        SELECT
+          DISTINCT TIME
+        FROM
+          ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX,
+          fy_bounds b
+        WHERE
+          VERSION = 'Actual'
+          AND TIME >= b.fy_start_year || '-10'
+        ORDER BY
+          TIME DESC
+        LIMIT
+          2
+      ), period_labels AS (
+        SELECT
+          MAX(TIME) AS current_month,
+          MIN(TIME) AS prior_month
+        FROM
+          latest_periods
+      )
+      SELECT
+        acct.ACCOUNT_LEVEL_2,
+        acct.ACCOUNT_LEVEL_3,
+        acct.ACCOUNT_LEVEL_4,
+        acct.ACCOUNT_CODE_AND_DESC,
+        SUM(
+          CASE
+            WHEN f.TIME = p.current_month THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS CURRENT_MONTH,
+        SUM(
+          CASE
+            WHEN f.TIME = p.prior_month THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS PRIOR_MONTH,
+        SUM(
+          CASE
+            WHEN f.TIME = p.current_month THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.TIME = p.prior_month THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS MOM_CHANGE
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        CROSS JOIN period_labels p
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_ACCOUNT acct ON f.ACCOUNT = acct.ACCOUNT_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND f.TIME IN (p.current_month, p.prior_month)
+        AND acct.ACCOUNT_LEVEL_1 = 'OPEX'
+      GROUP BY
+        1,
+        2,
+        3,
+        4
+      HAVING
+        ABS(MOM_CHANGE) > 0
+      ORDER BY
+        MOM_CHANGE DESC
+    question: Show month over month OPEX change by account. What changed between the last two months?
+    verified_at: 1781273133
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+  - name: '"Year-over-year cost center comparison. Which cost centers grew the most?"'
+    sql: |-
+      WITH fy_bounds AS (
+        SELECT
+          CASE
+            WHEN MONTH(CURRENT_DATE()) >= 10 THEN YEAR(CURRENT_DATE())
+            ELSE YEAR(CURRENT_DATE()) - 1
+          END AS fy_start_year
+      ),
+      current_fy_periods AS (
+        SELECT
+          DISTINCT f.TIME
+        FROM
+          ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f,
+          fy_bounds b
+        WHERE
+          f.VERSION = 'Actual'
+          AND f.TIME >= b.fy_start_year || '-10'
+          AND f.TIME <= (b.fy_start_year + 1) || '-09'
+      ),
+      prior_fy_periods AS (
+        SELECT
+          DISTINCT f.TIME
+        FROM
+          ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f,
+          fy_bounds b
+        WHERE
+          f.VERSION = 'Actual'
+          AND f.TIME >= (b.fy_start_year - 1) || '-10'
+          AND f.TIME <= b.fy_start_year || '-09'
+          AND SUBSTR(f.TIME, 6, 2) IN (
+            SELECT
+              SUBSTR(TIME, 6, 2)
+            FROM
+              current_fy_periods
+          )
+      )
+      SELECT
+        cc.COST_CENTER_LEVEL_3,
+        cc.COST_CENTER_LEVEL_4,
+        cc.COST_CENTER_CODE_AND_DESC,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                current_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS CURRENT_FY_ACTUAL,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                prior_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS PRIOR_FY_ACTUAL,
+        SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                current_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) - SUM(
+          CASE
+            WHEN f.TIME IN (
+              SELECT
+                TIME
+              FROM
+                prior_fy_periods
+            ) THEN f.VAL_EUR_NORM
+            ELSE 0
+          END
+        ) AS YOY_CHANGE
+      FROM
+        ACC_PRD.COST_CENTER.VW_JEDOX_DATA_OPEX f
+        JOIN ACC_PRD.MASTERDATA.VW_JEDOX_MASTER_DATA_COST_CENTER cc ON f.COST_CENTER = cc.COST_CENTER_CODE
+      WHERE
+        f.VERSION = 'Actual'
+        AND (
+          f.TIME IN (
+            SELECT
+              TIME
+            FROM
+              current_fy_periods
+          )
+          OR f.TIME IN (
+            SELECT
+              TIME
+            FROM
+              prior_fy_periods
+          )
+        )
+        AND cc.COST_CENTER_LEVEL_1 = 'All Cost Centers'
+        AND cc.COST_CENTER_LEVEL_2 = 'By Owner'
+      GROUP BY
+        1,
+        2,
+        3
+      HAVING
+        ABS(YOY_CHANGE) > 0
+      ORDER BY
+        YOY_CHANGE DESC
+    question: Year-over-year cost center comparison. Which cost centers grew the most?
+    verified_at: 1781273119
+    verified_by: Matilda Migwi
+    use_as_onboarding_question: false
+module_custom_instructions:
+  sql_generation: |-
+    DEFAULT BEHAVIOR FOR ALL QUERIES: 1. Always use VAL_EUR_NORM as the value column unless user specifies USD/EUR/LC. 2. Always filter VERSION = 'Actual' unless user asks for budget/forecast. 3. Always apply ACCOUNT_LEVEL_1 = 'OPEX' unless user asks for other categories. 4. Always apply COST_CENTER_LEVEL_1 = 'All Cost Centers' unless user asks for GEO Service. 5. Always apply ENTITY_LEVEL_1 = 'Worldwide' unless user asks for other entities. 6. Always default to current fiscal year (FY2026 = TIME BETWEEN '2025-10' AND '2026-09') when no time is specified. 7. When user asks 'why', 'reason', 'explain', or 'diagnose', include ALL hierarchy levels in the SELECT to show a drilldown.
+
+    NUMBER FORMATTING RULES: - Always format financial values with 2 decimal places and thousands separators. - Use TO_CHAR(value, '999,999,999,990.00') for formatted output columns. - When values exceed 1 million, also include a summary column with abbreviations: value/1000000 as 'XM', value/1000 as 'XK'. - Label columns clearly: TOTAL_SPEND_EUR, TOTAL_SPEND_K (thousands), TOTAL_SPEND_M (millions).
+
+    LOCAL CURRENCY RULE: When reporting VAL_LC (local currency), ALWAYS GROUP BY CURRENCY. Never aggregate VAL_LC across different currencies — this would produce meaningless totals (e.g. mixing JPY + EUR + BRL). Always show CURRENCY as a column so the user knows which currency each row represents.
+
+    - FY2026 = TIME BETWEEN '2025-10' AND '2026-09' - FY2025 = TIME BETWEEN '2024-10' AND '2025-09' - FY2024 = TIME BETWEEN '2023-10' AND '2024-09' - Q1 = Oct-Dec, Q2 = Jan-Mar, Q3 = Apr-Jun, Q4 = Jul-Sep
+  question_categorization: |-
+    FISCAL YEAR DEFINITION: The fiscal year begins in OCTOBER and ends in SEPTEMBER.
+
+    When no time period is specified, always default to the current fiscal year (FY2026). When user says 'this quarter', determine which fiscal quarter the current month falls in. When user says 'YTD', use from October of the current FY through the latest available month.
