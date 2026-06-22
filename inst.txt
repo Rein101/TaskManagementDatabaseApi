@@ -1,0 +1,19 @@
+Hello! 
+With a real functioning AI chatbot I would love to see answers for below questions  The Opex Drivers project was focusing on the U+4 report (ACT vs FCST)  that is supposed to help us generate commentary. So my dream was the chatbot but it was more of a model that generated commentary based on the input from a human. (We had to generate the report and drag and drop into the snowflake environment) 
+ 
+Selection = Selected Cost centers, GL accounts, Profit centers, Period, Functional Area
+
+What are the key drivers for differences in "Selection" when we are checking the actuals compared to Forecast ? (ACT VS FCST)
+Compare Period A to Period B (for example compare Q1 FY26 to Q1 FY25) - selection should be possible here as well and list the key differences and draw assumptions. 
+Based on selected period (for example the past 18 months or 36 months etc...) can you provide trend analysis for selection. (example: consulting trend analysis for AMS RA team) 
+Can you suggest a forecast to me that takes into account the seasonality of expenses based on the trend of the past 3 years for selection? ( for example help in forecasting tech costs for Global SVC teams)
+How much was the merit, annualization effect in "Selection" - how much are the open positions in our forecast.
+Can you simulate how much can we save if we postpone hiring for "Selection'
+Can you simulate how much we can save if we move Team A from Location X to Location Y
+General questions like how much the total cost of employee in an entity or CC, or how much is the average travel spend.... etc.
+Some additional ideas:
+Provide a cost center based information about SHS crosscharges from past 1 year, and provide proposal for future months or next year, compare proposal to forecast and propose adjustment needs
+Provide vendor based information for selected cost type ( consulting, tech cost, contractor etc )
+Provide monthly hiring trend information related to new joiners, termination, check average hiring time and provide proposal for future growth based on past one year trend
+Analyze bad debt per customer comparing their outstandings trend from the past 1 year, highlight risky customers
+Create comparisons for certain cost type or FTE to Install base, revenue, provide insights where we can see understaffed or overstaffed situation
